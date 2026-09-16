@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" rx="10" fill="#1d2225"/>
+  <rect x="10" y="10" width="16" height="16" rx="2" fill="#2f757c"/>
+  <text x="32" y="44" font-family="monospace" font-weight="700" font-size="26" fill="#f5f6f7">IT</text>
+</svg>
