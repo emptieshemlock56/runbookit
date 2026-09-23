@@ -31,6 +31,15 @@ if (process.env.CORS_ORIGIN) {
   app.use(cors({ origin: process.env.CORS_ORIGIN, credentials: true }));
 }
 
+// API responses can vary per signed-in user (session, admin status, etc.) and must
+// never be cached by a CDN or browser - a cached response could otherwise be served
+// to a different visitor entirely. This also means a config change (like adding a
+// Turnstile key) takes effect immediately instead of waiting out a stale cache.
+app.use('/api', (req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  next();
+});
+
 app.use(attachUser);
 
 // Rate limiting: throttles brute-force login attempts, signup spam, and scripted

@@ -7,6 +7,7 @@ const router = express.Router();
 // The Turnstile SITE key is meant to be public (unlike the secret key); it's null
 // until TURNSTILE_SITE_KEY is set, and the frontend just skips the CAPTCHA widget then.
 router.get('/config', (req, res) => {
+  res.set('Cache-Control', 'no-store');
   res.json({ turnstileSiteKey: process.env.TURNSTILE_SITE_KEY || null });
 });
 
