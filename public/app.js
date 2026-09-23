@@ -1587,7 +1587,7 @@ What is this article about, and who's it for?
         <div class="hs-modal-field"><span class="hs-field-label">Username</span><input id="hs-auth-user" type="text" placeholder="e.g. zack" onkeydown="if(event.key==='Enter'){HS.submitAuth();}" /></div>
         <div class="hs-modal-field"><span class="hs-field-label">Password</span><input id="hs-auth-pass" type="password" placeholder="10+ characters, upper+lowercase, a number" onkeydown="if(event.key==='Enter'){HS.submitAuth();}" /></div>
         ${!isLogin ? `<div class="hs-modal-field"><span class="hs-field-label">Email</span><input id="hs-auth-email" type="text" placeholder="you@example.com - a code is sent to verify it" onkeydown="if(event.key==='Enter'){HS.submitAuth();}" /></div>` : ''}
-        ${(!isLogin && STATE.turnstileSiteKey) ? `<div class="hs-modal-field"><div class="cf-turnstile" data-sitekey="${escAttr(STATE.turnstileSiteKey)}" data-callback="onTurnstileSuccess"></div></div>` : ''}
+        ${(!isLogin && STATE.turnstileSiteKey) ? `<div class="hs-modal-field"><div id="hs-turnstile-container"></div></div>` : ''}
         ${STATE.authError ? `<div class="hs-error">${escAttr(STATE.authError)}</div>` : ''}
         <div class="hs-modal-actions">
           <button class="switch hs-switch" onclick="HS.openAuth('${isLogin?'signup':'login'}')">${isLogin? "Need an account? Sign up" : "Already have one? Sign in"}</button>
@@ -1635,9 +1635,23 @@ What is this article about, and who's it for?
       </div>
       ${renderAuthModal()}
     `;
+    setTimeout(()=>mountTurnstileIfNeeded(0), 0);
   }
-
-  window.onTurnstileSuccess = function(token){ STATE.turnstileToken = token; };
+  // Explicit Turnstile rendering: since the whole app re-renders by replacing innerHTML,
+  // the container (if present) is always freshly empty right after a render - so this
+  // naturally handles "render once" correctly with no extra state tracking needed.
+  function mountTurnstileIfNeeded(attempt){
+    const container = document.getElementById('hs-turnstile-container');
+    if(!container || container.childElementCount > 0) return;
+    if(window.turnstile && window.turnstile.render){
+      window.turnstile.render(container, {
+        sitekey: STATE.turnstileSiteKey,
+        callback: function(token){ STATE.turnstileToken = token; },
+      });
+    }else if(attempt < 15){
+      setTimeout(()=>mountTurnstileIfNeeded(attempt+1), 200);
+    }
+  }
 
   window.HS = {
     goHome, goNew, goEdit, openArticle,
