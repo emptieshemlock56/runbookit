@@ -80,6 +80,14 @@ ensureColumn('articles', 'locked', 'locked INTEGER NOT NULL DEFAULT 0');
 ensureColumn('users', 'rejected_count', 'rejected_count INTEGER NOT NULL DEFAULT 0');
 ensureColumn('users', 'comments_removed_count', 'comments_removed_count INTEGER NOT NULL DEFAULT 0');
 ensureColumn('pending_submissions', 'tags', "tags TEXT NOT NULL DEFAULT '[]'");
+ensureColumn('users', 'email', 'email TEXT');
+ensureColumn('users', 'email_verified', 'email_verified INTEGER NOT NULL DEFAULT 0');
+ensureColumn('users', 'pending_email', 'pending_email TEXT');
+ensureColumn('users', 'pending_email_code', 'pending_email_code TEXT');
+ensureColumn('users', 'pending_email_code_expires', 'pending_email_code_expires INTEGER');
+ensureColumn('users', 'totp_secret', 'totp_secret TEXT');
+ensureColumn('users', 'totp_pending_secret', 'totp_pending_secret TEXT');
+ensureColumn('users', 'totp_enabled', 'totp_enabled INTEGER NOT NULL DEFAULT 0');
 
 // --- New tables (additive - never touches existing data) ---
 db.exec(`

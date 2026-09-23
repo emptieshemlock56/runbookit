@@ -3,6 +3,13 @@ const { db, toIndexRow } = require('../db');
 
 const router = express.Router();
 
+// GET /api/config - public, non-sensitive runtime config the frontend needs.
+// The Turnstile SITE key is meant to be public (unlike the secret key); it's null
+// until TURNSTILE_SITE_KEY is set, and the frontend just skips the CAPTCHA widget then.
+router.get('/config', (req, res) => {
+  res.json({ turnstileSiteKey: process.env.TURNSTILE_SITE_KEY || null });
+});
+
 // GET /api/categories - every category, in the order they were created
 router.get('/categories', (req, res) => {
   const rows = db.prepare('SELECT slug, label FROM categories ORDER BY created_at ASC').all();

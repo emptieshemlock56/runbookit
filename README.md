@@ -62,6 +62,14 @@ Visit **http://localhost:3000**.
 
 Any signed-in user can report an article or a comment (a small "Report" button, prompts for a reason). Admins see a red "REPORTS (N)" badge in the nav the moment something's flagged - even if the admin is the one who just filed it - and a Reports page listing each one with its target and reason. Dismissing just clears the report; if the content itself needs action, use the existing lock/ban/delete tools separately.
 
+## Authentication updates
+
+- **Enter key now submits sign-in/sign-up** (was previously mouse-only).
+- **Optional email + verification code** at signup, or later from the Account page (click your username in the nav). Uses a pluggable sender (`email.js`): if `RESEND_API_KEY` isn't set, the code is printed to the server console instead of actually emailed - fully testable without spending anything, swap in a real Resend API key whenever you're ready to send real mail.
+- **2FA (TOTP)** - set up from the Account page: scan the QR code with Google Authenticator/Authy/etc, confirm with a code, done. Login then requires a second step (password, then code) whenever it's on. Disabling requires a valid code too, so a stolen session token alone can't turn it off.
+- **CAPTCHA on signup (Cloudflare Turnstile)** - safe no-op until you set `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY` in `.env`. Get both free from the Cloudflare dashboard → your domain → Turnstile (or Security → Turnstile, depending on plan) → Add site → widget mode "Managed."
+- **Admin-created local accounts** - Manage Users → "+ Create user." Skips the new-account review queue and CAPTCHA entirely (the admin is vouching for it); email, if given, is marked pre-verified.
+
 ## S3 backups
 
 Admin page → "Backup settings" (linked from Manage Users). Set a bucket, region, and an IAM access key/secret, then either click "Back up now" or check "Run automatically once a day." Backs up all three SQLite files (`.db`, `-wal`, `-shm`) to `backups/<timestamp>/` in the bucket. The secret key is stored server-side only and is never sent back to the browser - leave the key fields blank when updating other settings to keep what's already saved.

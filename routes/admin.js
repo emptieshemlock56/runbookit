@@ -1,9 +1,37 @@
 const express = require('express');
 const { db, slugify, setArticleTags } = require('../db');
-const { requireAdmin } = require('../auth');
+const { requireAdmin, hashPassword } = require('../auth');
 const backup = require('../backup');
 
 const router = express.Router();
+
+const USERNAME_RE = /^[a-zA-Z0-9_-]{3,24}$/;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// POST /api/admin/users - admin only. Creates an account directly, no signup flow,
+// no CAPTCHA, no email verification (the admin is vouching for it). Automatically
+// trusted so it skips the new-account review queue.
+router.post('/users', requireAdmin, async (req, res) => {
+  const { username, password, email, isAdmin } = req.body || {};
+  if (typeof username !== 'string' || !USERNAME_RE.test(username)) {
+    return res.status(400).json({ error: 'Username must be 3-24 characters: letters, numbers, - or _ only.' });
+  }
+  if (typeof password !== 'string' || password.length < 6) {
+    return res.status(400).json({ error: 'Password must be at least 6 characters.' });
+  }
+  if (email && !EMAIL_RE.test(email)) {
+    return res.status(400).json({ error: 'That email address doesn\'t look valid.' });
+  }
+  const usernameLower = username.toLowerCase();
+  if (db.prepare('SELECT id FROM users WHERE username_lower = ?').get(usernameLower)) {
+    return res.status(409).json({ error: 'That username is already taken.' });
+  }
+  const hash = await hashPassword(password);
+  const now = Date.now();
+  const info = db.prepare(`INSERT INTO users (username, username_lower, password_hash, created_at, trusted, is_admin, email, email_verified)
+    VALUES (?, ?, ?, ?, 1, ?, ?, ?)`).run(username, usernameLower, hash, now, isAdmin ? 1 : 0, email || null, email ? 1 : 0);
+  res.status(201).json({ id: info.lastInsertRowid, username, isAdmin: !!isAdmin });
+});
 
 // GET /api/admin/pending - admin only. New-account submissions awaiting review.
 router.get('/pending', requireAdmin, (req, res) => {

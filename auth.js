@@ -19,6 +19,19 @@ async function verifyPassword(pw, hash) {
 function signToken(user) {
   return jwt.sign({ uid: user.id }, JWT_SECRET, { expiresIn: TOKEN_TTL });
 }
+// Short-lived token used only to carry a user through the "enter your 2FA code" step
+// after password verification - never set as a cookie, never grants a real session.
+function signTempTotpToken(userId) {
+  return jwt.sign({ uid: userId, purpose: '2fa' }, JWT_SECRET, { expiresIn: '5m' });
+}
+function verifyTempTotpToken(token) {
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    return decoded.purpose === '2fa' ? decoded.uid : null;
+  } catch (e) {
+    return null;
+  }
+}
 function setSessionCookie(res, token) {
   res.cookie(COOKIE_NAME, token, {
     httpOnly: true,
@@ -45,9 +58,12 @@ function readUidFromCookie(req) {
 function attachUser(req, res, next) {
   const uid = readUidFromCookie(req);
   if (!uid) { req.user = null; return next(); }
-  const row = db.prepare('SELECT id, username, is_admin, banned, trusted FROM users WHERE id = ?').get(uid);
+  const row = db.prepare('SELECT id, username, is_admin, banned, trusted, email, email_verified, totp_enabled FROM users WHERE id = ?').get(uid);
   if (!row || row.banned) { req.user = null; return next(); }
-  req.user = { id: row.id, username: row.username, isAdmin: !!row.is_admin, isTrusted: !!row.is_admin || !!row.trusted };
+  req.user = {
+    id: row.id, username: row.username, isAdmin: !!row.is_admin, isTrusted: !!row.is_admin || !!row.trusted,
+    email: row.email || null, emailVerified: !!row.email_verified, totpEnabled: !!row.totp_enabled,
+  };
   next();
 }
 function requireAuth(req, res, next) {
@@ -61,6 +77,7 @@ function requireAdmin(req, res, next) {
 }
 
 module.exports = {
-  hashPassword, verifyPassword, signToken, setSessionCookie, clearSessionCookie,
+  hashPassword, verifyPassword, signToken, signTempTotpToken, verifyTempTotpToken,
+  setSessionCookie, clearSessionCookie,
   attachUser, requireAuth, requireAdmin, COOKIE_NAME,
 };

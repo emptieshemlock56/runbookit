@@ -46,6 +46,16 @@
     backupRunning:false,
     backupBanner:null,
     backupDraft:null,
+    turnstileSiteKey:null,
+    turnstileToken:null,
+    totpChallenge:null,
+    accountBanner:null,
+    twoFaSetup:null,
+    twoFaCodeInput:'',
+    emailInput:'',
+    showCreateUserForm:false,
+    newUserDraft:{username:'',password:'',email:'',isAdmin:false},
+    createUserBanner:null,
     diffOpenId:null,
     diffLines:null,
     diffLoading:false,
@@ -193,6 +203,108 @@
       STATE.adminLoadError = true;
       render();
     }
+  }
+  function toggleCreateUserForm(){
+    STATE.showCreateUserForm = !STATE.showCreateUserForm;
+    STATE.newUserDraft = {username:'',password:'',email:'',isAdmin:false};
+    STATE.createUserBanner = null;
+    render();
+  }
+  async function submitCreateUser(){
+    const d = STATE.newUserDraft;
+    if(!d.username.trim() || !d.password){ STATE.createUserBanner={type:'error', text:'Username and password are required.'}; render(); return; }
+    try{
+      await api('POST','/admin/users', {username:d.username.trim(), password:d.password, email:d.email.trim()||undefined, isAdmin:d.isAdmin});
+      STATE.createUserBanner = {type:'ok', text:`${d.username.trim()} created.`};
+      STATE.newUserDraft = {username:'',password:'',email:'',isAdmin:false};
+      const data = await api('GET','/admin/users');
+      STATE.adminUsers = data.users;
+    }catch(e){
+      STATE.createUserBanner = {type:'error', text:e.message};
+    }
+    render();
+  }
+  function goAccount(){
+    STATE.view = {name:'account'};
+    STATE.accountBanner = null;
+    STATE.emailInput = '';
+    STATE.twoFaSetup = null;
+    STATE.twoFaCodeInput = '';
+    render();
+  }
+  async function submitSetEmail(){
+    const email = STATE.emailInput.trim();
+    if(!email){ STATE.accountBanner={type:'error', text:'Enter an email address.'}; render(); return; }
+    try{
+      await api('POST','/auth/set-email', {email});
+      const me = await api('GET','/auth/me');
+      STATE.user = me.user;
+      STATE.emailInput = '';
+      STATE.accountBanner = {type:'ok', text:'Check your inbox for a verification code.'};
+    }catch(e){
+      STATE.accountBanner = {type:'error', text:e.message};
+    }
+    render();
+  }
+  async function submitVerifyEmailCode(){
+    const code = document.getElementById('hs-verify-code').value;
+    if(!code){ STATE.accountBanner={type:'error', text:'Enter the code from your email.'}; render(); return; }
+    try{
+      await api('POST','/auth/verify-email', {code});
+      const me = await api('GET','/auth/me');
+      STATE.user = me.user;
+      STATE.accountBanner = {type:'ok', text:'Email verified.'};
+    }catch(e){
+      STATE.accountBanner = {type:'error', text:e.message};
+    }
+    render();
+  }
+  async function resendVerificationCode(){
+    try{
+      await api('POST','/auth/resend-verification');
+      STATE.accountBanner = {type:'ok', text:'New code sent.'};
+    }catch(e){
+      STATE.accountBanner = {type:'error', text:e.message};
+    }
+    render();
+  }
+  async function startTotpSetup(){
+    try{
+      const data = await api('POST','/auth/2fa/setup');
+      STATE.twoFaSetup = data;
+      STATE.accountBanner = null;
+    }catch(e){
+      STATE.accountBanner = {type:'error', text:e.message};
+    }
+    render();
+  }
+  async function confirmTotpSetup(){
+    const code = STATE.twoFaCodeInput.trim();
+    if(!code){ STATE.accountBanner={type:'error', text:'Enter the 6-digit code from your app.'}; render(); return; }
+    try{
+      await api('POST','/auth/2fa/confirm', {code});
+      const me = await api('GET','/auth/me');
+      STATE.user = me.user;
+      STATE.twoFaSetup = null;
+      STATE.twoFaCodeInput = '';
+      STATE.accountBanner = {type:'ok', text:'Two-factor authentication is now on.'};
+    }catch(e){
+      STATE.accountBanner = {type:'error', text:e.message};
+    }
+    render();
+  }
+  async function disableTotp(){
+    const code = prompt('Enter your current 6-digit code to confirm disabling 2FA:');
+    if(!code) return;
+    try{
+      await api('POST','/auth/2fa/disable', {code});
+      const me = await api('GET','/auth/me');
+      STATE.user = me.user;
+      STATE.accountBanner = {type:'ok', text:'Two-factor authentication turned off.'};
+    }catch(e){
+      STATE.accountBanner = {type:'error', text:e.message};
+    }
+    render();
   }
   async function goBackupSettings(){
     STATE.view = {name:'backup'};
@@ -610,9 +722,35 @@
     const p = document.getElementById('hs-auth-pass').value;
     if(!u || !p){ STATE.authError='Enter a username and password.'; render(); return; }
     try{
-      const data = await api('POST','/auth/'+STATE.authModal, {username:u, password:p});
+      const payload = {username:u, password:p};
+      if(STATE.authModal==='signup'){
+        const emailEl = document.getElementById('hs-auth-email');
+        if(emailEl && emailEl.value.trim()) payload.email = emailEl.value.trim();
+        if(STATE.turnstileSiteKey) payload.captchaToken = STATE.turnstileToken;
+      }
+      const data = await api('POST','/auth/'+STATE.authModal, payload);
+      if(data.requiresTotp){
+        STATE.totpChallenge = {tempToken: data.tempToken};
+        STATE.authError = '';
+        render();
+        return;
+      }
       STATE.user = data.user;
-      STATE.authModal = null; STATE.authError='';
+      STATE.authModal = null; STATE.authError=''; STATE.totpChallenge = null; STATE.turnstileToken = null;
+      render();
+      if(STATE.user.isAdmin){ refreshPendingCount(); refreshReportCount(); }
+      loadNotifications();
+    }catch(e){
+      STATE.authError = e.message; render();
+    }
+  }
+  async function submitTotpChallenge(){
+    const code = document.getElementById('hs-totp-code').value;
+    if(!code){ STATE.authError='Enter the 6-digit code.'; render(); return; }
+    try{
+      const data = await api('POST','/auth/login/totp', {tempToken: STATE.totpChallenge.tempToken, code});
+      STATE.user = data.user;
+      STATE.authModal = null; STATE.authError=''; STATE.totpChallenge = null;
       render();
       if(STATE.user.isAdmin){ refreshPendingCount(); refreshReportCount(); }
       loadNotifications();
@@ -784,7 +922,7 @@
           <button class="ghost" onclick="HS.toggleNotifDropdown()">&#128276;${STATE.unreadCount>0?` <span style="background:var(--danger);color:#fff;padding:1px 6px;font-size:10px;font-weight:700;">${STATE.unreadCount}</span>`:''}</button>
           ${STATE.notifDropdownOpen ? renderNotifDropdown() : ''}
         </div>` : ''}
-        ${STATE.user ? `<div class="hs-userchip">signed in as <b>${escAttr(STATE.user.username)}</b>${STATE.user.isAdmin?`<a href="#" onclick="HS.goAdmin();return false;" class="hs-admin-badge" style="text-decoration:none;cursor:pointer;">admin</a>`:''}${(STATE.user.isAdmin && STATE.pendingCount>0)?`<a href="#" onclick="HS.goReview();return false;" class="hs-admin-badge" style="text-decoration:none;cursor:pointer;background:var(--danger);">review (${STATE.pendingCount})</a>`:''}${(STATE.user.isAdmin && STATE.reportCount>0)?`<a href="#" onclick="HS.goReports();return false;" class="hs-admin-badge" style="text-decoration:none;cursor:pointer;background:var(--danger);">reports (${STATE.reportCount})</a>`:''}<button class="ghost" onclick="HS.logout()">Sign out</button></div>`
+        ${STATE.user ? `<div class="hs-userchip">signed in as <a href="#" onclick="HS.goAccount();return false;"><b>${escAttr(STATE.user.username)}</b></a>${STATE.user.isAdmin?`<a href="#" onclick="HS.goAdmin();return false;" class="hs-admin-badge" style="text-decoration:none;cursor:pointer;">admin</a>`:''}${(STATE.user.isAdmin && STATE.pendingCount>0)?`<a href="#" onclick="HS.goReview();return false;" class="hs-admin-badge" style="text-decoration:none;cursor:pointer;background:var(--danger);">review (${STATE.pendingCount})</a>`:''}${(STATE.user.isAdmin && STATE.reportCount>0)?`<a href="#" onclick="HS.goReports();return false;" class="hs-admin-badge" style="text-decoration:none;cursor:pointer;background:var(--danger);">reports (${STATE.reportCount})</a>`:''}<button class="ghost" onclick="HS.logout()">Sign out</button></div>`
           : `<button onclick="HS.openAuth('login')">Sign in</button><button onclick="HS.openAuth('signup')">Sign up</button>`}
       </div>
     </div>`;
@@ -1132,7 +1270,19 @@ What is this article about, and who's it for?
 
     return `<div class="hs-main">
       <div class="hs-breadcrumb"><a href="#" onclick="HS.goHome();return false;">all articles</a> / Admin</div>
-      <div class="hs-list-head"><h2>Manage users</h2><button class="ghost" onclick="HS.goBackupSettings()">Backup settings</button></div>
+      <div class="hs-list-head"><h2>Manage users</h2><div style="display:flex;gap:8px;"><button class="ghost" onclick="HS.toggleCreateUserForm()">${STATE.showCreateUserForm?'Cancel':'+ Create user'}</button><button class="ghost" onclick="HS.goBackupSettings()">Backup settings</button></div></div>
+      ${STATE.showCreateUserForm ? `
+        <div class="hs-related" style="margin-top:0;">
+          <h4>Create a local account</h4>
+          <div class="hs-editor-grid" style="max-width:380px;">
+            <div><span class="hs-field-label">Username</span><input type="text" value="${escAttr(STATE.newUserDraft.username)}" oninput="HS.onNewUserDraft('username', this.value)" placeholder="e.g. jsmith" /></div>
+            <div><span class="hs-field-label">Password</span><input type="password" value="${escAttr(STATE.newUserDraft.password)}" oninput="HS.onNewUserDraft('password', this.value)" placeholder="At least 6 characters" /></div>
+            <div><span class="hs-field-label">Email (optional)</span><input type="text" value="${escAttr(STATE.newUserDraft.email)}" oninput="HS.onNewUserDraft('email', this.value)" placeholder="pre-marked as verified" /></div>
+            <div><label style="display:flex;align-items:center;gap:8px;font-size:13.5px;cursor:pointer;"><input type="checkbox" style="width:auto;" ${STATE.newUserDraft.isAdmin?'checked':''} onchange="HS.onNewUserDraft('isAdmin', this.checked)" /> Make this account an admin</label></div>
+            ${STATE.createUserBanner ? `<div class="${STATE.createUserBanner.type==='error'?'hs-error':'hs-hint'}" style="${STATE.createUserBanner.type==='ok'?'color:var(--ok);':''}">${escAttr(STATE.createUserBanner.text)}</div>` : ''}
+            <div class="hs-editor-actions"><button class="primary" onclick="HS.submitCreateUser()">Create account</button></div>
+          </div>
+        </div>` : ''}
       <div class="hs-hint" style="margin-bottom:14px;">${STATE.adminUsers.length} account${STATE.adminUsers.length===1?'':'s'} total. "Rejected" counts submissions turned down in the review queue; "Removed" counts comments an admin took down (not the user's own deletions). Admins can't be banned directly - demote first if that's ever needed. The last remaining admin can't be demoted, to avoid locking everyone out.</div>
       <div style="overflow-x:auto;">
         <table class="hs-admin-table">
@@ -1141,6 +1291,64 @@ What is this article about, and who's it for?
           </tr></thead>
           <tbody>${rows}</tbody>
         </table>
+      </div>
+    </div>`;
+  }
+  function renderAccount(){
+    if(!STATE.user) return `<div class="hs-main"><div class="hs-empty">Sign in required.</div></div>`;
+    const u = STATE.user;
+    const banner = STATE.accountBanner ? `<div class="${STATE.accountBanner.type==='error'?'hs-error':'hs-hint'}" style="${STATE.accountBanner.type==='ok'?'color:var(--ok);':''}margin-bottom:12px;">${escAttr(STATE.accountBanner.text)}</div>` : '';
+
+    let emailSection;
+    if(u.email && u.emailVerified){
+      emailSection = `<div class="hs-hint">Verified: <b style="color:var(--text);">${escAttr(u.email)}</b></div>`;
+    }else if(u.email && !u.emailVerified){
+      emailSection = `
+        <div class="hs-hint" style="margin-bottom:8px;">A code was sent to <b style="color:var(--text);">${escAttr(u.email)}</b> - enter it below to verify.</div>
+        <div style="display:flex;gap:8px;">
+          <input id="hs-verify-code" type="text" placeholder="6-digit code" style="max-width:160px;" onkeydown="if(event.key==='Enter'){HS.submitVerifyEmailCode();}" />
+          <button class="primary" onclick="HS.submitVerifyEmailCode()">Verify</button>
+          <button class="ghost" onclick="HS.resendVerificationCode()">Resend code</button>
+        </div>`;
+    }else{
+      emailSection = `
+        <div class="hs-hint" style="margin-bottom:8px;">No email on file yet.</div>
+        <div style="display:flex;gap:8px;">
+          <input type="text" placeholder="you@example.com" style="max-width:240px;" value="${escAttr(STATE.emailInput)}" oninput="HS.onEmailInput(this.value)" onkeydown="if(event.key==='Enter'){HS.submitSetEmail();}" />
+          <button class="primary" onclick="HS.submitSetEmail()">Send code</button>
+        </div>`;
+    }
+
+    let twoFaSection;
+    if(u.totpEnabled){
+      twoFaSection = `<div class="hs-hint" style="margin-bottom:10px;">Two-factor authentication is <b style="color:var(--ok);">on</b>.</div>
+        <button class="ghost" onclick="HS.disableTotp()">Disable 2FA</button>`;
+    }else if(STATE.twoFaSetup){
+      twoFaSection = `
+        <div class="hs-hint" style="margin-bottom:10px;">Scan this with Google Authenticator, Authy, or similar, then enter the 6-digit code it shows.</div>
+        <img src="${STATE.twoFaSetup.qrDataUrl}" alt="2FA QR code" style="width:180px;height:180px;border:1.5px solid var(--border);margin-bottom:10px;display:block;" />
+        <div class="hs-hint" style="margin-bottom:10px;">Can't scan? Enter manually: <span class="mono">${escAttr(STATE.twoFaSetup.secret)}</span></div>
+        <div style="display:flex;gap:8px;">
+          <input type="text" placeholder="6-digit code" style="max-width:160px;" value="${escAttr(STATE.twoFaCodeInput)}" oninput="HS.onTwoFaCodeInput(this.value)" onkeydown="if(event.key==='Enter'){HS.confirmTotpSetup();}" />
+          <button class="primary" onclick="HS.confirmTotpSetup()">Confirm & enable</button>
+          <button class="ghost" onclick="HS.goAccount()">Cancel</button>
+        </div>`;
+    }else{
+      twoFaSection = `<div class="hs-hint" style="margin-bottom:10px;">Off. Add an authenticator app for an extra layer of protection on sign-in.</div>
+        <button class="primary" onclick="HS.startTotpSetup()">Set up 2FA</button>`;
+    }
+
+    return `<div class="hs-main" style="max-width:480px;">
+      <div class="hs-breadcrumb"><a href="#" onclick="HS.goHome();return false;">all articles</a> / Account</div>
+      <div class="hs-list-head"><h2>${escAttr(u.username)}</h2></div>
+      ${banner}
+      <div class="hs-related" style="margin-top:0;">
+        <h4>Email</h4>
+        ${emailSection}
+      </div>
+      <div class="hs-related">
+        <h4>Two-factor authentication</h4>
+        ${twoFaSection}
       </div>
     </div>`;
   }
@@ -1352,13 +1560,32 @@ What is this article about, and who's it for?
   }
   function renderAuthModal(){
     if(!STATE.authModal) return '';
+    if(STATE.totpChallenge){
+      return `<div class="hs-overlay" onclick="if(event.target===this) HS.closeAuth();">
+        <div class="hs-modal">
+          <h3>Two-factor code</h3>
+          <div class="sub">Enter the 6-digit code from your authenticator app.</div>
+          <div class="hs-modal-field"><span class="hs-field-label">Code</span><input id="hs-totp-code" type="text" inputmode="numeric" placeholder="123456" onkeydown="if(event.key==='Enter'){HS.submitTotpChallenge();}" /></div>
+          ${STATE.authError ? `<div class="hs-error">${escAttr(STATE.authError)}</div>` : ''}
+          <div class="hs-modal-actions">
+            <span></span>
+            <div style="display:flex;gap:8px;">
+              <button class="ghost" onclick="HS.closeAuth()">Cancel</button>
+              <button class="primary" onclick="HS.submitTotpChallenge()">Verify</button>
+            </div>
+          </div>
+        </div>
+      </div>`;
+    }
     const isLogin = STATE.authModal==='login';
     return `<div class="hs-overlay" onclick="if(event.target===this) HS.closeAuth();">
       <div class="hs-modal">
         <h3>${isLogin?'Sign in':'Create an account'}</h3>
         <div class="sub">${isLogin? 'Sign in to edit articles and comment.' : 'Passwords are hashed and stored on the server. Use a real password if you want, but this is a small community tool, not a bank.'}</div>
-        <div class="hs-modal-field"><span class="hs-field-label">Username</span><input id="hs-auth-user" type="text" placeholder="e.g. zack" /></div>
-        <div class="hs-modal-field"><span class="hs-field-label">Password</span><input id="hs-auth-pass" type="password" placeholder="At least 6 characters" /></div>
+        <div class="hs-modal-field"><span class="hs-field-label">Username</span><input id="hs-auth-user" type="text" placeholder="e.g. zack" onkeydown="if(event.key==='Enter'){HS.submitAuth();}" /></div>
+        <div class="hs-modal-field"><span class="hs-field-label">Password</span><input id="hs-auth-pass" type="password" placeholder="At least 6 characters" onkeydown="if(event.key==='Enter'){HS.submitAuth();}" /></div>
+        ${!isLogin ? `<div class="hs-modal-field"><span class="hs-field-label">Email (optional)</span><input id="hs-auth-email" type="text" placeholder="for account verification" onkeydown="if(event.key==='Enter'){HS.submitAuth();}" /></div>` : ''}
+        ${(!isLogin && STATE.turnstileSiteKey) ? `<div class="hs-modal-field"><div class="cf-turnstile" data-sitekey="${escAttr(STATE.turnstileSiteKey)}" data-callback="onTurnstileSuccess"></div></div>` : ''}
         ${STATE.authError ? `<div class="hs-error">${escAttr(STATE.authError)}</div>` : ''}
         <div class="hs-modal-actions">
           <button class="switch hs-switch" onclick="HS.openAuth('${isLogin?'signup':'login'}')">${isLogin? "Need an account? Sign up" : "Already have one? Sign in"}</button>
@@ -1387,6 +1614,7 @@ What is this article about, and who's it for?
     else if(STATE.view.name==='edit') mainHtml = renderEditor(false);
     else if(STATE.view.name==='admin') mainHtml = renderAdminPage();
     else if(STATE.view.name==='backup') mainHtml = renderBackupSettings();
+    else if(STATE.view.name==='account') mainHtml = renderAccount();
     else if(STATE.view.name==='review') mainHtml = renderReviewQueue();
     else if(STATE.view.name==='submitted') mainHtml = renderSubmitted();
     else if(STATE.view.name==='profile') mainHtml = renderProfile();
@@ -1407,16 +1635,18 @@ What is this article about, and who's it for?
     `;
   }
 
+  window.onTurnstileSuccess = function(token){ STATE.turnstileToken = token; };
+
   window.HS = {
     goHome, goNew, goEdit, openArticle,
     setCategory(id){ STATE.category=id; STATE.tagFilter=null; STATE.search=''; STATE.searchResults=null; STATE.view={name:'home'}; render(); },
     setTagFilter(tag){ STATE.tagFilter=tag; STATE.category=null; STATE.search=''; STATE.searchResults=null; STATE.view={name:'home'}; render(); },
     onSearch(v){ STATE.search=v; if(STATE.view.name!=='home') STATE.view={name:'home'}; runSearch(v); },
-    openAuth(mode){ STATE.authModal=mode; STATE.authError=''; render();
+    openAuth(mode){ STATE.authModal=mode; STATE.authError=''; STATE.totpChallenge=null; STATE.turnstileToken=null; render();
       setTimeout(()=>{ const el=document.getElementById('hs-auth-user'); if(el) el.focus(); },0);
     },
-    closeAuth(){ STATE.authModal=null; STATE.authError=''; render(); },
-    submitAuth, logout: doLogout,
+    closeAuth(){ STATE.authModal=null; STATE.authError=''; STATE.totpChallenge=null; STATE.turnstileToken=null; render(); },
+    submitAuth, submitTotpChallenge, logout: doLogout,
     onDraft(field, val){ STATE.editDraft[field]=val; },
     onCategoryChange(val){ STATE.editDraft.category=val; STATE.editDraft.newCategoryLabel=''; render(); },
     submitNewArticle, submitEdit,
@@ -1431,6 +1661,12 @@ What is this article about, and who's it for?
     castVote,
     goAdmin, toggleBan, toggleAdmin,
     goBackupSettings, saveBackupSettings, runBackupNow,
+    goAccount, submitSetEmail, submitVerifyEmailCode, resendVerificationCode,
+    startTotpSetup, confirmTotpSetup, disableTotp,
+    onEmailInput(v){ STATE.emailInput=v; },
+    onTwoFaCodeInput(v){ STATE.twoFaCodeInput=v; },
+    toggleCreateUserForm, submitCreateUser,
+    onNewUserDraft(field, val){ STATE.newUserDraft[field]=val; },
     onBackupDraft(field, val){ STATE.backupDraft[field]=val; },
     goReview, approvePending, rejectPending,
     goReports, dismissReport,
@@ -1445,6 +1681,7 @@ What is this article about, and who's it for?
     STATE.booted = false; STATE.bootError = false; render();
     try{
       await Promise.all([loadIndex(), loadCategories()]);
+      try{ const cfg = await api('GET','/config'); STATE.turnstileSiteKey = cfg.turnstileSiteKey; }catch(e){}
       const me = await api('GET','/auth/me');
       STATE.user = me.user || null;
       STATE.booted = true;
