@@ -102,7 +102,9 @@ app.get('/rss.xml', (req, res) => {
   res.type('application/rss+xml').send(xml);
 });
 
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public'), {
+  setHeaders: (res) => res.set('Cache-Control', 'no-store'),
+}));
 
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
