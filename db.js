@@ -141,6 +141,10 @@ CREATE TABLE IF NOT EXISTS categories (
   label TEXT NOT NULL,
   created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT
+);
 CREATE VIRTUAL TABLE IF NOT EXISTS articles_fts USING fts5(
   title, body, content='articles', content_rowid='id'
 );
@@ -470,4 +474,13 @@ function seedIfEmpty() {
 
 seedIfEmpty();
 
-module.exports = { db, slugify, ensureAdminExists, normalizeTags, setArticleTags, getArticleTags, toIndexRow, resolveCategory, categorySlugify };
+function getSetting(key) {
+  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
+  return row ? row.value : null;
+}
+function setSetting(key, value) {
+  db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+    .run(key, value === null || value === undefined ? null : String(value));
+}
+
+module.exports = { db, slugify, ensureAdminExists, normalizeTags, setArticleTags, getArticleTags, toIndexRow, resolveCategory, categorySlugify, getSetting, setSetting };

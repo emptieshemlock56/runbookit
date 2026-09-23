@@ -40,6 +40,12 @@
     reportsLoadError:false,
     reportCount:0,
     uploadingImage:false,
+    backupSettings:null,
+    backupLoadError:false,
+    backupSaving:false,
+    backupRunning:false,
+    backupBanner:null,
+    backupDraft:null,
     diffOpenId:null,
     diffLines:null,
     diffLoading:false,
@@ -65,6 +71,7 @@
     if(!res.ok){
       const err = new Error((data && data.error) || ('Request failed ('+res.status+')'));
       err.status = res.status;
+      err.data = data;
       throw err;
     }
     return data;
@@ -186,6 +193,55 @@
       STATE.adminLoadError = true;
       render();
     }
+  }
+  async function goBackupSettings(){
+    STATE.view = {name:'backup'};
+    STATE.backupSettings = null; STATE.backupLoadError = false; STATE.backupBanner = null;
+    render();
+    try{
+      const data = await withTimeout(api('GET','/admin/backup-settings'), 10000);
+      STATE.backupSettings = data.settings;
+      STATE.backupDraft = {bucket:data.settings.bucket, region:data.settings.region, accessKeyId:'', secretAccessKey:'', autoEnabled:data.settings.autoEnabled};
+      render();
+    }catch(e){
+      console.error('goBackupSettings failed', e);
+      STATE.backupLoadError = true;
+      render();
+    }
+  }
+  async function saveBackupSettings(){
+    STATE.backupSaving = true; STATE.backupBanner = null;
+    render();
+    try{
+      const d = STATE.backupDraft;
+      const data = await api('POST','/admin/backup-settings', {
+        bucket: d.bucket, region: d.region,
+        accessKeyId: d.accessKeyId || undefined,
+        secretAccessKey: d.secretAccessKey || undefined,
+        autoEnabled: d.autoEnabled,
+      });
+      STATE.backupSettings = data.settings;
+      STATE.backupDraft.accessKeyId = ''; STATE.backupDraft.secretAccessKey = '';
+      STATE.backupBanner = {type:'ok', text:'Saved.'};
+    }catch(e){
+      STATE.backupBanner = {type:'error', text:e.message};
+    }
+    STATE.backupSaving = false;
+    render();
+  }
+  async function runBackupNow(){
+    STATE.backupRunning = true; STATE.backupBanner = null;
+    render();
+    try{
+      const data = await api('POST','/admin/backup-now');
+      STATE.backupSettings = data.settings;
+      STATE.backupBanner = {type:'ok', text:`Backup complete - ${data.result.filesUploaded} file(s) uploaded to ${data.result.prefix}`};
+    }catch(e){
+      STATE.backupBanner = {type:'error', text:e.message};
+      if(e.data && e.data.settings) STATE.backupSettings = e.data.settings;
+    }
+    STATE.backupRunning = false;
+    render();
   }
   async function goReview(){
     STATE.view = {name:'review'};
@@ -1076,7 +1132,7 @@ What is this article about, and who's it for?
 
     return `<div class="hs-main">
       <div class="hs-breadcrumb"><a href="#" onclick="HS.goHome();return false;">all articles</a> / Admin</div>
-      <div class="hs-list-head"><h2>Manage users</h2></div>
+      <div class="hs-list-head"><h2>Manage users</h2><button class="ghost" onclick="HS.goBackupSettings()">Backup settings</button></div>
       <div class="hs-hint" style="margin-bottom:14px;">${STATE.adminUsers.length} account${STATE.adminUsers.length===1?'':'s'} total. "Rejected" counts submissions turned down in the review queue; "Removed" counts comments an admin took down (not the user's own deletions). Admins can't be banned directly - demote first if that's ever needed. The last remaining admin can't be demoted, to avoid locking everyone out.</div>
       <div style="overflow-x:auto;">
         <table class="hs-admin-table">
@@ -1085,6 +1141,54 @@ What is this article about, and who's it for?
           </tr></thead>
           <tbody>${rows}</tbody>
         </table>
+      </div>
+    </div>`;
+  }
+  function renderBackupSettings(){
+    if(!isAdmin()) return `<div class="hs-main"><div class="hs-empty">Admin access required.</div></div>`;
+    if(STATE.backupLoadError){
+      return `<div class="hs-main"><div class="hs-empty">Couldn't load backup settings.<br><br>
+        <button class="primary" onclick="HS.goBackupSettings()">Try again</button>
+      </div></div>`;
+    }
+    if(!STATE.backupSettings) return `<div class="hs-main"><div class="hs-empty">Loading...</div></div>`;
+    const s = STATE.backupSettings, d = STATE.backupDraft;
+    const lastRun = s.lastBackupAt
+      ? `${new Date(s.lastBackupAt).toLocaleString()} - ${s.lastBackupStatus==='ok' ? 'succeeded' : 'failed'}${s.lastBackupStatus!=='ok' && s.lastBackupError ? ' ('+escAttr(s.lastBackupError)+')' : ''}`
+      : 'never run yet';
+    return `<div class="hs-main">
+      <div class="hs-breadcrumb"><a href="#" onclick="HS.goAdmin();return false;">manage users</a> / Backup settings</div>
+      <div class="hs-list-head"><h2>S3 backup settings</h2></div>
+      <div class="hs-hint" style="margin-bottom:16px;">Off-server backups of your database to an S3 bucket. Credentials are stored server-side and never sent back to the browser - leave the key fields blank when saving to keep what's already there.</div>
+      <div class="hs-editor-grid" style="max-width:480px;">
+        <div>
+          <span class="hs-field-label">Bucket name</span>
+          <input type="text" value="${escAttr(d.bucket)}" oninput="HS.onBackupDraft('bucket', this.value)" placeholder="e.g. runbookit-backups" />
+        </div>
+        <div>
+          <span class="hs-field-label">Region</span>
+          <input type="text" value="${escAttr(d.region)}" oninput="HS.onBackupDraft('region', this.value)" placeholder="e.g. us-east-1" />
+        </div>
+        <div>
+          <span class="hs-field-label">Access key ID ${s.hasCredentials?'(already set - leave blank to keep it)':''}</span>
+          <input type="text" value="${escAttr(d.accessKeyId)}" oninput="HS.onBackupDraft('accessKeyId', this.value)" placeholder="${s.hasCredentials?'unchanged':'AKIA...'}" />
+        </div>
+        <div>
+          <span class="hs-field-label">Secret access key ${s.hasCredentials?'(already set - leave blank to keep it)':''}</span>
+          <input type="password" value="${escAttr(d.secretAccessKey)}" oninput="HS.onBackupDraft('secretAccessKey', this.value)" placeholder="${s.hasCredentials?'unchanged':''}" />
+        </div>
+        <div>
+          <label style="display:flex;align-items:center;gap:8px;font-size:13.5px;cursor:pointer;">
+            <input type="checkbox" style="width:auto;" ${d.autoEnabled?'checked':''} onchange="HS.onBackupDraft('autoEnabled', this.checked)" />
+            Run automatically once a day
+          </label>
+        </div>
+        ${STATE.backupBanner ? `<div class="${STATE.backupBanner.type==='error'?'hs-error':'hs-hint'}" style="${STATE.backupBanner.type==='ok'?'color:var(--ok);':''}">${escAttr(STATE.backupBanner.text)}</div>` : ''}
+        <div class="hs-editor-actions">
+          <button class="primary" onclick="HS.saveBackupSettings()" ${STATE.backupSaving?'disabled':''}>${STATE.backupSaving?'Saving...':'Save settings'}</button>
+          <button class="ghost" onclick="HS.runBackupNow()" ${STATE.backupRunning?'disabled':''}>${STATE.backupRunning?'Backing up...':'Back up now'}</button>
+        </div>
+        <div class="hs-hint">Last run: ${lastRun}</div>
       </div>
     </div>`;
   }
@@ -1282,6 +1386,7 @@ What is this article about, and who's it for?
     else if(STATE.view.name==='new') mainHtml = renderEditor(true);
     else if(STATE.view.name==='edit') mainHtml = renderEditor(false);
     else if(STATE.view.name==='admin') mainHtml = renderAdminPage();
+    else if(STATE.view.name==='backup') mainHtml = renderBackupSettings();
     else if(STATE.view.name==='review') mainHtml = renderReviewQueue();
     else if(STATE.view.name==='submitted') mainHtml = renderSubmitted();
     else if(STATE.view.name==='profile') mainHtml = renderProfile();
@@ -1325,6 +1430,8 @@ What is this article about, and who's it for?
     tbAction, copyCode, uploadImage,
     castVote,
     goAdmin, toggleBan, toggleAdmin,
+    goBackupSettings, saveBackupSettings, runBackupNow,
+    onBackupDraft(field, val){ STATE.backupDraft[field]=val; },
     goReview, approvePending, rejectPending,
     goReports, dismissReport,
     toggleNotifDropdown, openNotification, markAllNotifsRead,

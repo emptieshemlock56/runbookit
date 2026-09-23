@@ -7,6 +7,7 @@ const rateLimit = require('express-rate-limit');
 
 const { attachUser } = require('./auth');
 const { db } = require('./db');
+const { maybeRunScheduledBackup } = require('./backup');
 const authRoutes = require('./routes/auth');
 const articleRoutes = require('./routes/articles');
 const adminRoutes = require('./routes/admin');
@@ -101,3 +102,8 @@ app.use((err, req, res, next) => {
 app.listen(PORT, () => {
   console.log(`howtosysadmin running at http://localhost:${PORT}`);
 });
+
+// Auto-backup check: runs on startup, then every hour. Each run is a no-op unless
+// auto-backup is enabled, configured, and it's been ~24h since the last successful run.
+maybeRunScheduledBackup();
+setInterval(maybeRunScheduledBackup, 60 * 60 * 1000);

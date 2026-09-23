@@ -62,6 +62,15 @@ Visit **http://localhost:3000**.
 
 Any signed-in user can report an article or a comment (a small "Report" button, prompts for a reason). Admins see a red "REPORTS (N)" badge in the nav the moment something's flagged - even if the admin is the one who just filed it - and a Reports page listing each one with its target and reason. Dismissing just clears the report; if the content itself needs action, use the existing lock/ban/delete tools separately.
 
+## S3 backups
+
+Admin page → "Backup settings" (linked from Manage Users). Set a bucket, region, and an IAM access key/secret, then either click "Back up now" or check "Run automatically once a day." Backs up all three SQLite files (`.db`, `-wal`, `-shm`) to `backups/<timestamp>/` in the bucket. The secret key is stored server-side only and is never sent back to the browser - leave the key fields blank when updating other settings to keep what's already saved.
+
+**AWS setup needed before this works for real:**
+1. Create an S3 bucket (any region).
+2. Create an IAM user (or role) with a policy allowing `s3:PutObject` on that bucket - doesn't need broader S3 access.
+3. Generate an access key for that IAM user, paste the key ID/secret into the admin page.
+
 ## Moderation & abuse protection
 
 This is a genuinely open wiki - anyone with an account can edit anything - so a few protections are built in:

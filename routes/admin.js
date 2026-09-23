@@ -1,6 +1,7 @@
 const express = require('express');
 const { db, slugify, setArticleTags } = require('../db');
 const { requireAdmin } = require('../auth');
+const backup = require('../backup');
 
 const router = express.Router();
 
@@ -153,6 +154,31 @@ router.post('/reports/:id/dismiss', requireAdmin, (req, res) => {
   if (!r) return res.status(404).json({ error: 'Report not found.' });
   db.prepare("UPDATE reports SET status = 'dismissed' WHERE id = ?").run(r.id);
   res.json({ ok: true });
+});
+
+// GET /api/admin/backup-settings - admin only. Never returns the secret key itself.
+router.get('/backup-settings', requireAdmin, (req, res) => {
+  res.json({ settings: backup.getBackupConfig() });
+});
+
+// POST /api/admin/backup-settings - admin only. Access key/secret are optional on
+// update - leave them blank to keep whatever was saved before.
+router.post('/backup-settings', requireAdmin, (req, res) => {
+  const { bucket, region, accessKeyId, secretAccessKey, autoEnabled } = req.body || {};
+  if (bucket !== undefined && typeof bucket !== 'string') return res.status(400).json({ error: 'Invalid bucket.' });
+  if (region !== undefined && typeof region !== 'string') return res.status(400).json({ error: 'Invalid region.' });
+  backup.saveBackupConfig({ bucket, region, accessKeyId, secretAccessKey, autoEnabled });
+  res.json({ settings: backup.getBackupConfig() });
+});
+
+// POST /api/admin/backup-now - admin only. Runs a backup immediately and reports the result.
+router.post('/backup-now', requireAdmin, async (req, res) => {
+  try {
+    const result = await backup.runBackup();
+    res.json({ ok: true, result, settings: backup.getBackupConfig() });
+  } catch (err) {
+    res.status(400).json({ error: err.message, settings: backup.getBackupConfig() });
+  }
 });
 
 module.exports = router;
