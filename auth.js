@@ -13,6 +13,14 @@ const TOKEN_TTL = '30d';
 async function hashPassword(pw) {
   return bcrypt.hash(pw, 10);
 }
+// Minimum 10 characters, at least one uppercase, one lowercase, one number.
+function validatePassword(pw) {
+  if (typeof pw !== 'string' || pw.length < 10) return 'Password must be at least 10 characters.';
+  if (!/[A-Z]/.test(pw)) return 'Password must include at least one uppercase letter.';
+  if (!/[a-z]/.test(pw)) return 'Password must include at least one lowercase letter.';
+  if (!/[0-9]/.test(pw)) return 'Password must include at least one number.';
+  return null;
+}
 async function verifyPassword(pw, hash) {
   return bcrypt.compare(pw, hash);
 }
@@ -77,7 +85,7 @@ function requireAdmin(req, res, next) {
 }
 
 module.exports = {
-  hashPassword, verifyPassword, signToken, signTempTotpToken, verifyTempTotpToken,
+  hashPassword, verifyPassword, validatePassword, signToken, signTempTotpToken, verifyTempTotpToken,
   setSessionCookie, clearSessionCookie,
   attachUser, requireAuth, requireAdmin, COOKIE_NAME,
 };

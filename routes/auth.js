@@ -2,7 +2,7 @@ const express = require('express');
 const crypto = require('crypto');
 const { db, ensureAdminExists } = require('../db');
 const {
-  hashPassword, verifyPassword, signToken, signTempTotpToken, verifyTempTotpToken,
+  hashPassword, verifyPassword, validatePassword, signToken, signTempTotpToken, verifyTempTotpToken,
   setSessionCookie, clearSessionCookie, requireAuth,
 } = require('../auth');
 const { verifyTurnstile } = require('../captcha');
@@ -36,10 +36,12 @@ router.post('/signup', async (req, res) => {
   if (!USERNAME_RE.test(username)) {
     return res.status(400).json({ error: 'Username must be 3-24 characters: letters, numbers, - or _ only.' });
   }
-  if (password.length < 6) {
-    return res.status(400).json({ error: 'Password must be at least 6 characters.' });
+  const pwError = validatePassword(password);
+  if (pwError) return res.status(400).json({ error: pwError });
+  if (typeof email !== 'string' || !email.trim()) {
+    return res.status(400).json({ error: 'Email is required.' });
   }
-  if (email !== undefined && email !== '' && !EMAIL_RE.test(email)) {
+  if (!EMAIL_RE.test(email)) {
     return res.status(400).json({ error: 'That email address doesn\'t look valid.' });
   }
 

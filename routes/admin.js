@@ -1,6 +1,6 @@
 const express = require('express');
 const { db, slugify, setArticleTags } = require('../db');
-const { requireAdmin, hashPassword } = require('../auth');
+const { requireAdmin, hashPassword, validatePassword } = require('../auth');
 const backup = require('../backup');
 
 const router = express.Router();
@@ -16,9 +16,8 @@ router.post('/users', requireAdmin, async (req, res) => {
   if (typeof username !== 'string' || !USERNAME_RE.test(username)) {
     return res.status(400).json({ error: 'Username must be 3-24 characters: letters, numbers, - or _ only.' });
   }
-  if (typeof password !== 'string' || password.length < 6) {
-    return res.status(400).json({ error: 'Password must be at least 6 characters.' });
-  }
+  const pwError = validatePassword(password);
+  if (pwError) return res.status(400).json({ error: pwError });
   if (email && !EMAIL_RE.test(email)) {
     return res.status(400).json({ error: 'That email address doesn\'t look valid.' });
   }

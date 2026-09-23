@@ -725,7 +725,9 @@
       const payload = {username:u, password:p};
       if(STATE.authModal==='signup'){
         const emailEl = document.getElementById('hs-auth-email');
-        if(emailEl && emailEl.value.trim()) payload.email = emailEl.value.trim();
+        const emailVal = emailEl ? emailEl.value.trim() : '';
+        if(!emailVal){ STATE.authError='Email is required.'; render(); return; }
+        payload.email = emailVal;
         if(STATE.turnstileSiteKey) payload.captchaToken = STATE.turnstileToken;
       }
       const data = await api('POST','/auth/'+STATE.authModal, payload);
@@ -1276,7 +1278,7 @@ What is this article about, and who's it for?
           <h4>Create a local account</h4>
           <div class="hs-editor-grid" style="max-width:380px;">
             <div><span class="hs-field-label">Username</span><input type="text" value="${escAttr(STATE.newUserDraft.username)}" oninput="HS.onNewUserDraft('username', this.value)" placeholder="e.g. jsmith" /></div>
-            <div><span class="hs-field-label">Password</span><input type="password" value="${escAttr(STATE.newUserDraft.password)}" oninput="HS.onNewUserDraft('password', this.value)" placeholder="At least 6 characters" /></div>
+            <div><span class="hs-field-label">Password</span><input type="password" value="${escAttr(STATE.newUserDraft.password)}" oninput="HS.onNewUserDraft('password', this.value)" placeholder="10+ characters, upper+lowercase, a number" /></div>
             <div><span class="hs-field-label">Email (optional)</span><input type="text" value="${escAttr(STATE.newUserDraft.email)}" oninput="HS.onNewUserDraft('email', this.value)" placeholder="pre-marked as verified" /></div>
             <div><label style="display:flex;align-items:center;gap:8px;font-size:13.5px;cursor:pointer;"><input type="checkbox" style="width:auto;" ${STATE.newUserDraft.isAdmin?'checked':''} onchange="HS.onNewUserDraft('isAdmin', this.checked)" /> Make this account an admin</label></div>
             ${STATE.createUserBanner ? `<div class="${STATE.createUserBanner.type==='error'?'hs-error':'hs-hint'}" style="${STATE.createUserBanner.type==='ok'?'color:var(--ok);':''}">${escAttr(STATE.createUserBanner.text)}</div>` : ''}
@@ -1583,8 +1585,8 @@ What is this article about, and who's it for?
         <h3>${isLogin?'Sign in':'Create an account'}</h3>
         <div class="sub">${isLogin? 'Sign in to edit articles and comment.' : 'Passwords are hashed and stored on the server. Use a real password if you want, but this is a small community tool, not a bank.'}</div>
         <div class="hs-modal-field"><span class="hs-field-label">Username</span><input id="hs-auth-user" type="text" placeholder="e.g. zack" onkeydown="if(event.key==='Enter'){HS.submitAuth();}" /></div>
-        <div class="hs-modal-field"><span class="hs-field-label">Password</span><input id="hs-auth-pass" type="password" placeholder="At least 6 characters" onkeydown="if(event.key==='Enter'){HS.submitAuth();}" /></div>
-        ${!isLogin ? `<div class="hs-modal-field"><span class="hs-field-label">Email (optional)</span><input id="hs-auth-email" type="text" placeholder="for account verification" onkeydown="if(event.key==='Enter'){HS.submitAuth();}" /></div>` : ''}
+        <div class="hs-modal-field"><span class="hs-field-label">Password</span><input id="hs-auth-pass" type="password" placeholder="10+ characters, upper+lowercase, a number" onkeydown="if(event.key==='Enter'){HS.submitAuth();}" /></div>
+        ${!isLogin ? `<div class="hs-modal-field"><span class="hs-field-label">Email</span><input id="hs-auth-email" type="text" placeholder="you@example.com - a code is sent to verify it" onkeydown="if(event.key==='Enter'){HS.submitAuth();}" /></div>` : ''}
         ${(!isLogin && STATE.turnstileSiteKey) ? `<div class="hs-modal-field"><div class="cf-turnstile" data-sitekey="${escAttr(STATE.turnstileSiteKey)}" data-callback="onTurnstileSuccess"></div></div>` : ''}
         ${STATE.authError ? `<div class="hs-error">${escAttr(STATE.authError)}</div>` : ''}
         <div class="hs-modal-actions">
