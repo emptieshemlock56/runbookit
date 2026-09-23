@@ -2,7 +2,7 @@ const express = require('express');
 const crypto = require('crypto');
 const { db, ensureAdminExists } = require('../db');
 const {
-  hashPassword, verifyPassword, validatePassword, signToken, signTempTotpToken, verifyTempTotpToken,
+  hashPassword, verifyPassword, validatePassword, signToken, signTempToken, verifyTempToken,
   setSessionCookie, clearSessionCookie, requireAuth,
 } = require('../auth');
 const { verifyTurnstile } = require('../captcha');
@@ -26,6 +26,16 @@ function genCode() {
 async function sendVerificationEmail(username, email, code) {
   await sendEmail(email, 'Verify your runbookIT.wiki email',
     `Hi ${username},\n\nYour verification code is: ${code}\n\nThis code expires in 15 minutes. If you didn't request this, you can ignore this email.`);
+}
+// Shared final step of any login path: if 2FA is on, hand back a challenge instead
+// of a session; otherwise grant the real session. Used after password, and again
+// after a successful email-verification code, so both paths behave identically.
+function completeLogin(row, res) {
+  if (row.totp_enabled) {
+    return res.json({ requiresTotp: true, tempToken: signTempToken(row.id, '2fa', '5m') });
+  }
+  setSessionCookie(res, signToken(row));
+  res.json({ user: publicUser(row) });
 }
 
 router.post('/signup', async (req, res) => {
@@ -53,23 +63,21 @@ router.post('/signup', async (req, res) => {
   if (existing) return res.status(409).json({ error: 'That username is already taken.' });
 
   const hash = await hashPassword(password);
-  const info = db.prepare(
-    'INSERT INTO users (username, username_lower, password_hash, created_at) VALUES (?, ?, ?, ?)'
-  ).run(username, usernameLower, hash, Date.now());
+  const now = Date.now();
+  const code = genCode();
+  const info = db.prepare(`INSERT INTO users (username, username_lower, password_hash, created_at, pending_email, pending_email_code, pending_email_code_expires)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`).run(username, usernameLower, hash, now, email, code, now + 15 * 60 * 1000);
 
   // First-ever account becomes admin automatically.
   ensureAdminExists();
 
-  if (email) {
-    const code = genCode();
-    db.prepare('UPDATE users SET pending_email = ?, pending_email_code = ?, pending_email_code_expires = ? WHERE id = ?')
-      .run(email, code, Date.now() + 15 * 60 * 1000, info.lastInsertRowid);
-    try { await sendVerificationEmail(username, email, code); } catch (e) { console.error('Could not send verification email:', e.message); }
-  }
+  try { await sendVerificationEmail(username, email, code); } catch (e) { console.error('Could not send verification email:', e.message); }
 
-  const row = db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid);
-  setSessionCookie(res, signToken(row));
-  res.json({ user: publicUser(row) });
+  // No session yet - the account exists but isn't usable until the email code is entered.
+  res.status(202).json({
+    requiresEmailVerification: true,
+    tempToken: signTempToken(info.lastInsertRowid, 'email_verify'),
+  });
 });
 
 router.post('/login', async (req, res) => {
@@ -83,17 +91,19 @@ router.post('/login', async (req, res) => {
   const ok = await verifyPassword(password, row.password_hash);
   if (!ok) return res.status(401).json({ error: 'Incorrect password.' });
 
-  if (row.totp_enabled) {
-    return res.json({ requiresTotp: true, tempToken: signTempTotpToken(row.id) });
+  // Only gate on email verification if this account actually has one pending - accounts
+  // created before email was required (or by an admin without one) are never blocked
+  // by a requirement they were never given in the first place.
+  if (!row.email_verified && row.pending_email) {
+    return res.json({ requiresEmailVerification: true, tempToken: signTempToken(row.id, 'email_verify') });
   }
-  setSessionCookie(res, signToken(row));
-  res.json({ user: publicUser(row) });
+  completeLogin(row, res);
 });
 
 // POST /auth/login/totp - completes login after a password check that required a 2FA code.
 router.post('/login/totp', (req, res) => {
   const { tempToken, code } = req.body || {};
-  const uid = verifyTempTotpToken(tempToken);
+  const uid = verifyTempToken(tempToken, '2fa');
   if (!uid) return res.status(401).json({ error: 'That login attempt expired. Please sign in again.' });
   const row = db.prepare('SELECT * FROM users WHERE id = ?').get(uid);
   if (!row || row.banned) return res.status(401).json({ error: 'Sign in required.' });
@@ -101,6 +111,44 @@ router.post('/login/totp', (req, res) => {
 
   setSessionCookie(res, signToken(row));
   res.json({ user: publicUser(row) });
+});
+
+// POST /auth/login/verify-email - completes signup or a blocked login by checking the
+// emailed code. No session cookie required to call this (uses the tempToken instead) -
+// on success it finishes the same way a normal login would (grant session, or hand off
+// to the 2FA step if that's also enabled).
+router.post('/login/verify-email', (req, res) => {
+  const { tempToken, code } = req.body || {};
+  const uid = verifyTempToken(tempToken, 'email_verify');
+  if (!uid) return res.status(401).json({ error: 'That verification attempt expired. Please sign in again.' });
+  const row = db.prepare('SELECT * FROM users WHERE id = ?').get(uid);
+  if (!row || row.banned) return res.status(401).json({ error: 'Sign in required.' });
+  if (!row.pending_email_code) return res.status(400).json({ error: 'No verification pending for this account.' });
+  if (Date.now() > row.pending_email_code_expires) return res.status(400).json({ error: 'That code expired - request a new one.' });
+  if (String(code).trim() !== row.pending_email_code) return res.status(400).json({ error: 'Incorrect code.' });
+
+  db.prepare('UPDATE users SET email = ?, email_verified = 1, pending_email = NULL, pending_email_code = NULL, pending_email_code_expires = NULL WHERE id = ?')
+    .run(row.pending_email, row.id);
+  const updated = db.prepare('SELECT * FROM users WHERE id = ?').get(row.id);
+  completeLogin(updated, res);
+});
+
+// POST /auth/login/resend-email-code - resend during signup/login, before a real session exists.
+router.post('/login/resend-email-code', async (req, res) => {
+  const { tempToken } = req.body || {};
+  const uid = verifyTempToken(tempToken, 'email_verify');
+  if (!uid) return res.status(401).json({ error: 'That verification attempt expired. Please sign in again.' });
+  const row = db.prepare('SELECT * FROM users WHERE id = ?').get(uid);
+  if (!row || !row.pending_email) return res.status(400).json({ error: 'No verification pending for this account.' });
+  const code = genCode();
+  db.prepare('UPDATE users SET pending_email_code = ?, pending_email_code_expires = ? WHERE id = ?')
+    .run(code, Date.now() + 15 * 60 * 1000, row.id);
+  try {
+    await sendVerificationEmail(row.username, row.pending_email, code);
+  } catch (e) {
+    return res.status(500).json({ error: 'Could not send the email right now. Please try again shortly.' });
+  }
+  res.json({ ok: true });
 });
 
 router.post('/logout', (req, res) => {
@@ -112,7 +160,7 @@ router.get('/me', (req, res) => {
   res.json({ user: req.user || null });
 });
 
-// --- Email verification ---
+// --- Email changes for already-signed-in users (Account page) ---
 
 router.post('/verify-email', requireAuth, async (req, res) => {
   const { code } = req.body || {};

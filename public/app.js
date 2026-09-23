@@ -49,6 +49,8 @@
     turnstileSiteKey:null,
     turnstileToken:null,
     totpChallenge:null,
+    emailChallenge:null,
+    emailResendBanner:null,
     accountBanner:null,
     twoFaSetup:null,
     twoFaCodeInput:'',
@@ -731,6 +733,12 @@
         if(STATE.turnstileSiteKey) payload.captchaToken = STATE.turnstileToken;
       }
       const data = await api('POST','/auth/'+STATE.authModal, payload);
+      if(data.requiresEmailVerification){
+        STATE.emailChallenge = {tempToken: data.tempToken};
+        STATE.authError = '';
+        render();
+        return;
+      }
       if(data.requiresTotp){
         STATE.totpChallenge = {tempToken: data.tempToken};
         STATE.authError = '';
@@ -738,7 +746,7 @@
         return;
       }
       STATE.user = data.user;
-      STATE.authModal = null; STATE.authError=''; STATE.totpChallenge = null; STATE.turnstileToken = null;
+      STATE.authModal = null; STATE.authError=''; STATE.totpChallenge = null; STATE.emailChallenge = null; STATE.turnstileToken = null;
       render();
       if(STATE.user.isAdmin){ refreshPendingCount(); refreshReportCount(); }
       loadNotifications();
@@ -759,6 +767,37 @@
     }catch(e){
       STATE.authError = e.message; render();
     }
+  }
+  async function submitEmailChallenge(){
+    const code = document.getElementById('hs-email-code').value;
+    if(!code){ STATE.authError='Enter the code from your email.'; render(); return; }
+    try{
+      const data = await api('POST','/auth/login/verify-email', {tempToken: STATE.emailChallenge.tempToken, code});
+      STATE.emailChallenge = null;
+      if(data.requiresTotp){
+        STATE.totpChallenge = {tempToken: data.tempToken};
+        STATE.authError = '';
+        render();
+        return;
+      }
+      STATE.user = data.user;
+      STATE.authModal = null; STATE.authError='';
+      render();
+      if(STATE.user.isAdmin){ refreshPendingCount(); refreshReportCount(); }
+      loadNotifications();
+    }catch(e){
+      STATE.authError = e.message; render();
+    }
+  }
+  async function resendEmailChallenge(){
+    try{
+      await api('POST','/auth/login/resend-email-code', {tempToken: STATE.emailChallenge.tempToken});
+      STATE.authError = '';
+      STATE.emailResendBanner = 'New code sent.';
+    }catch(e){
+      STATE.authError = e.message;
+    }
+    render();
   }
   async function doLogout(){
     try{ await api('POST','/auth/logout'); }catch(e){}
@@ -1562,6 +1601,24 @@ What is this article about, and who's it for?
   }
   function renderAuthModal(){
     if(!STATE.authModal) return '';
+    if(STATE.emailChallenge){
+      return `<div class="hs-overlay" onclick="if(event.target===this) HS.closeAuth();">
+        <div class="hs-modal">
+          <h3>Verify your email</h3>
+          <div class="sub">Enter the code we just sent to finish signing in.</div>
+          <div class="hs-modal-field"><span class="hs-field-label">Code</span><input id="hs-email-code" type="text" inputmode="numeric" placeholder="123456" onkeydown="if(event.key==='Enter'){HS.submitEmailChallenge();}" /></div>
+          ${STATE.emailResendBanner ? `<div class="hs-hint" style="color:var(--ok);">${escAttr(STATE.emailResendBanner)}</div>` : ''}
+          ${STATE.authError ? `<div class="hs-error">${escAttr(STATE.authError)}</div>` : ''}
+          <div class="hs-modal-actions">
+            <button class="switch hs-switch" onclick="HS.resendEmailChallenge()">Resend code</button>
+            <div style="display:flex;gap:8px;">
+              <button class="ghost" onclick="HS.closeAuth()">Cancel</button>
+              <button class="primary" onclick="HS.submitEmailChallenge()">Verify</button>
+            </div>
+          </div>
+        </div>
+      </div>`;
+    }
     if(STATE.totpChallenge){
       return `<div class="hs-overlay" onclick="if(event.target===this) HS.closeAuth();">
         <div class="hs-modal">
@@ -1658,11 +1715,11 @@ What is this article about, and who's it for?
     setCategory(id){ STATE.category=id; STATE.tagFilter=null; STATE.search=''; STATE.searchResults=null; STATE.view={name:'home'}; render(); },
     setTagFilter(tag){ STATE.tagFilter=tag; STATE.category=null; STATE.search=''; STATE.searchResults=null; STATE.view={name:'home'}; render(); },
     onSearch(v){ STATE.search=v; if(STATE.view.name!=='home') STATE.view={name:'home'}; runSearch(v); },
-    openAuth(mode){ STATE.authModal=mode; STATE.authError=''; STATE.totpChallenge=null; STATE.turnstileToken=null; render();
+    openAuth(mode){ STATE.authModal=mode; STATE.authError=''; STATE.totpChallenge=null; STATE.emailChallenge=null; STATE.emailResendBanner=null; STATE.turnstileToken=null; render();
       setTimeout(()=>{ const el=document.getElementById('hs-auth-user'); if(el) el.focus(); },0);
     },
-    closeAuth(){ STATE.authModal=null; STATE.authError=''; STATE.totpChallenge=null; STATE.turnstileToken=null; render(); },
-    submitAuth, submitTotpChallenge, logout: doLogout,
+    closeAuth(){ STATE.authModal=null; STATE.authError=''; STATE.totpChallenge=null; STATE.emailChallenge=null; STATE.emailResendBanner=null; STATE.turnstileToken=null; render(); },
+    submitAuth, submitTotpChallenge, submitEmailChallenge, resendEmailChallenge, logout: doLogout,
     onDraft(field, val){ STATE.editDraft[field]=val; },
     onCategoryChange(val){ STATE.editDraft.category=val; STATE.editDraft.newCategoryLabel=''; render(); },
     submitNewArticle, submitEdit,

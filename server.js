@@ -62,6 +62,8 @@ const writeLimiter = rateLimit({
 app.use('/api/auth/login', authLimiter);
 app.use('/api/auth/signup', authLimiter);
 app.use('/api/auth/login/totp', authLimiter);
+app.use('/api/auth/login/verify-email', authLimiter);
+app.use('/api/auth/login/resend-email-code', authLimiter);
 app.use('/api/auth/2fa/confirm', authLimiter);
 app.use('/api/auth/2fa/disable', authLimiter);
 app.use('/api/auth/verify-email', authLimiter);

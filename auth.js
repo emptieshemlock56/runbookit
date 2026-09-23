@@ -27,15 +27,16 @@ async function verifyPassword(pw, hash) {
 function signToken(user) {
   return jwt.sign({ uid: user.id }, JWT_SECRET, { expiresIn: TOKEN_TTL });
 }
-// Short-lived token used only to carry a user through the "enter your 2FA code" step
-// after password verification - never set as a cookie, never grants a real session.
-function signTempTotpToken(userId) {
-  return jwt.sign({ uid: userId, purpose: '2fa' }, JWT_SECRET, { expiresIn: '5m' });
+// Short-lived, purpose-scoped token used to carry a user through a login "challenge"
+// step (2FA code, email verification code) - never set as a cookie, never grants a
+// real session on its own. A token signed for one purpose can't be reused for another.
+function signTempToken(userId, purpose, ttl) {
+  return jwt.sign({ uid: userId, purpose }, JWT_SECRET, { expiresIn: ttl || '15m' });
 }
-function verifyTempTotpToken(token) {
+function verifyTempToken(token, purpose) {
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    return decoded.purpose === '2fa' ? decoded.uid : null;
+    return decoded.purpose === purpose ? decoded.uid : null;
   } catch (e) {
     return null;
   }
@@ -85,7 +86,7 @@ function requireAdmin(req, res, next) {
 }
 
 module.exports = {
-  hashPassword, verifyPassword, validatePassword, signToken, signTempTotpToken, verifyTempTotpToken,
+  hashPassword, verifyPassword, validatePassword, signToken, signTempToken, verifyTempToken,
   setSessionCookie, clearSessionCookie,
   attachUser, requireAuth, requireAdmin, COOKIE_NAME,
 };
