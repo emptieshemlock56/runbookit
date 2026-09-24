@@ -1,7 +1,9 @@
 const express = require('express');
-const { db, slugify, setArticleTags } = require('../db');
+const crypto = require('crypto');
+const { db, slugify, setArticleTags, getSetting, setSetting } = require('../db');
 const { requireAdmin, hashPassword, validatePassword } = require('../auth');
 const backup = require('../backup');
+const { sendEmail } = require('../email');
 
 const router = express.Router();
 
@@ -92,8 +94,61 @@ router.post('/pending/:id/reject', requireAdmin, (req, res) => {
 });
 
 // GET /api/admin/users - admin only. Full account list with basic activity counts.
+// POST /api/admin/users/:username/clear-verification - admin only. Unblocks an
+// account stuck waiting on an email code it can't receive (e.g. no real inbox,
+// or the code expired) - clears the pending request without touching the password.
+router.post('/users/:username/clear-verification', requireAdmin, (req, res) => {
+  const target = db.prepare('SELECT * FROM users WHERE username_lower = ?').get(req.params.username.toLowerCase());
+  if (!target) return res.status(404).json({ error: 'User not found.' });
+  db.prepare('UPDATE users SET pending_email = NULL, pending_email_code = NULL, pending_email_code_expires = NULL WHERE id = ?').run(target.id);
+  res.json({ ok: true });
+});
+
+// POST /api/admin/users/:username/set-password - admin only. Sets a new password
+// directly, no email required - the admin-side equivalent of a password reset for
+// accounts that have no way to receive a reset email.
+router.post('/users/:username/set-password', requireAdmin, async (req, res) => {
+  const target = db.prepare('SELECT * FROM users WHERE username_lower = ?').get(req.params.username.toLowerCase());
+  if (!target) return res.status(404).json({ error: 'User not found.' });
+  const { password } = req.body || {};
+  const pwError = validatePassword(password);
+  if (pwError) return res.status(400).json({ error: pwError });
+  const hash = await hashPassword(password);
+  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hash, target.id);
+  res.json({ ok: true });
+});
+
+// POST /api/admin/users/:username/send-reset - admin only. Emails the user a
+// reset code, for accounts with a confirmed email that can receive it. For
+// accounts without one, use set-password instead.
+router.post('/users/:username/send-reset', requireAdmin, async (req, res) => {
+  const target = db.prepare('SELECT * FROM users WHERE username_lower = ?').get(req.params.username.toLowerCase());
+  if (!target) return res.status(404).json({ error: 'User not found.' });
+  if (!target.email) return res.status(400).json({ error: 'This account has no confirmed email - use "Set password" instead.' });
+  const code = String(crypto.randomInt(100000, 999999));
+  db.prepare('UPDATE users SET reset_code = ?, reset_code_expires = ? WHERE id = ?').run(code, Date.now() + 60 * 60 * 1000, target.id);
+  try {
+    await sendEmail(target.email, 'Reset your runbookIT.wiki password',
+      `Hi ${target.username},\n\nAn admin requested a password reset for your account. Your reset code is: ${code}\n\nGo to the sign-in screen, click "Forgot password?", and enter this code along with your new password. This code expires in 1 hour.\n\nIf you didn't expect this, you can ignore it - your password won't change unless this code is used.`);
+  } catch (e) {
+    return res.status(500).json({ error: 'Could not send the email right now. Please try again shortly.' });
+  }
+  res.json({ ok: true });
+});
+
+// GET/POST /api/admin/settings/require-2fa - admin only. Toggle mandatory 2FA
+// setup for every account going forward. Off by default so this never silently
+// locks anyone out - an admin has to deliberately turn it on.
+router.get('/settings/require-2fa', requireAdmin, (req, res) => {
+  res.json({ enabled: getSetting('require_2fa') === '1' });
+});
+router.post('/settings/require-2fa', requireAdmin, (req, res) => {
+  setSetting('require_2fa', req.body && req.body.enabled ? '1' : '0');
+  res.json({ enabled: getSetting('require_2fa') === '1' });
+});
+
 router.get('/users', requireAdmin, (req, res) => {
-  const users = db.prepare('SELECT id, username, is_admin, banned, trusted, rejected_count, comments_removed_count, created_at FROM users ORDER BY created_at ASC').all();
+  const users = db.prepare('SELECT id, username, is_admin, banned, trusted, rejected_count, comments_removed_count, created_at, email, email_verified, pending_email, totp_enabled FROM users ORDER BY created_at ASC').all();
   const articleCount = db.prepare('SELECT COUNT(*) AS c FROM articles WHERE created_by = ?');
   const editCount = db.prepare('SELECT COUNT(*) AS c FROM revisions WHERE editor = ?');
   const commentCount = db.prepare("SELECT COUNT(*) AS c FROM comments WHERE author = ? AND deleted_at IS NULL");
@@ -109,6 +164,10 @@ router.get('/users', requireAdmin, (req, res) => {
       commentsPosted: commentCount.get(u.username).c,
       rejectedCount: u.rejected_count,
       commentsRemoved: u.comments_removed_count,
+      email: u.email || null,
+      emailVerified: !!u.email_verified,
+      hasPendingVerification: !!u.pending_email,
+      totpEnabled: !!u.totp_enabled,
     })),
   });
 });

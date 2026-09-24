@@ -88,6 +88,8 @@ ensureColumn('users', 'pending_email_code_expires', 'pending_email_code_expires 
 ensureColumn('users', 'totp_secret', 'totp_secret TEXT');
 ensureColumn('users', 'totp_pending_secret', 'totp_pending_secret TEXT');
 ensureColumn('users', 'totp_enabled', 'totp_enabled INTEGER NOT NULL DEFAULT 0');
+ensureColumn('users', 'reset_code', 'reset_code TEXT');
+ensureColumn('users', 'reset_code_expires', 'reset_code_expires INTEGER');
 
 // --- New tables (additive - never touches existing data) ---
 db.exec(`

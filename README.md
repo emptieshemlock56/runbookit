@@ -62,6 +62,13 @@ Visit **http://localhost:3000**.
 
 Any signed-in user can report an article or a comment (a small "Report" button, prompts for a reason). Admins see a red "REPORTS (N)" badge in the nav the moment something's flagged - even if the admin is the one who just filed it - and a Reports page listing each one with its target and reason. Dismissing just clears the report; if the content itself needs action, use the existing lock/ban/delete tools separately.
 
+## Admin user management
+
+- **Manage Users table** now shows each account's email (and verification status) and whether 2FA is on.
+- **Password reset, two ways**: "Send reset" emails a 1-hour code to accounts with a confirmed email (user enters it via "Forgot password?" on the sign-in screen); "Set password" lets an admin set a new one directly, no email needed - the fallback for accounts that don't have one.
+- **"Clear stuck verification"** - unblocks an account stuck waiting on an email code it can never receive (wrong address, no inbox access, etc.) without touching its password.
+- **Mandatory 2FA, site-wide toggle** (Manage Users page) - off by default. Once on, any account without 2FA (including admins) is walked through setup the next time they sign in, rather than being locked out - nobody who's already logged in gets kicked, and nobody hits a dead end.
+
 ## Authentication updates
 
 - **Enter key now submits sign-in/sign-up** (was previously mouse-only).

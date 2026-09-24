@@ -1,6 +1,6 @@
 const express = require('express');
 const crypto = require('crypto');
-const { db, ensureAdminExists } = require('../db');
+const { db, ensureAdminExists, getSetting } = require('../db');
 const {
   hashPassword, verifyPassword, validatePassword, signToken, signTempToken, verifyTempToken,
   setSessionCookie, clearSessionCookie, requireAuth,
@@ -28,11 +28,14 @@ async function sendVerificationEmail(username, email, code) {
     `Hi ${username},\n\nYour verification code is: ${code}\n\nThis code expires in 15 minutes. If you didn't request this, you can ignore this email.`);
 }
 // Shared final step of any login path: if 2FA is on, hand back a challenge instead
-// of a session; otherwise grant the real session. Used after password, and again
-// after a successful email-verification code, so both paths behave identically.
+// of a session; if 2FA is mandated site-wide and this account hasn't set it up yet,
+// hand back a "set it up now" challenge instead; otherwise grant the real session.
 function completeLogin(row, res) {
   if (row.totp_enabled) {
     return res.json({ requiresTotp: true, tempToken: signTempToken(row.id, '2fa', '5m') });
+  }
+  if (getSetting('require_2fa') === '1') {
+    return res.json({ mustSetupTotp: true, tempToken: signTempToken(row.id, 'totp_setup', '15m') });
   }
   setSessionCookie(res, signToken(row));
   res.json({ user: publicUser(row) });
@@ -148,6 +151,57 @@ router.post('/login/resend-email-code', async (req, res) => {
   } catch (e) {
     return res.status(500).json({ error: 'Could not send the email right now. Please try again shortly.' });
   }
+  res.json({ ok: true });
+});
+
+// --- Mandatory 2FA setup (only reached when an admin has turned this on site-wide) ---
+// Same tempToken-challenge pattern as email verification: no real session exists yet,
+// so these two endpoints are scoped by the token instead of requireAuth.
+
+router.post('/login/2fa-setup', async (req, res) => {
+  const { tempToken } = req.body || {};
+  const uid = verifyTempToken(tempToken, 'totp_setup');
+  if (!uid) return res.status(401).json({ error: 'That attempt expired. Please sign in again.' });
+  const row = db.prepare('SELECT * FROM users WHERE id = ?').get(uid);
+  if (!row || row.banned) return res.status(401).json({ error: 'Sign in required.' });
+  const secret = totp.generateSecret();
+  db.prepare('UPDATE users SET totp_pending_secret = ? WHERE id = ?').run(secret, row.id);
+  const qrDataUrl = await totp.generateQrDataUrl(row.username, secret);
+  res.json({ secret, qrDataUrl });
+});
+
+router.post('/login/2fa-confirm', (req, res) => {
+  const { tempToken, code } = req.body || {};
+  const uid = verifyTempToken(tempToken, 'totp_setup');
+  if (!uid) return res.status(401).json({ error: 'That attempt expired. Please sign in again.' });
+  const row = db.prepare('SELECT * FROM users WHERE id = ?').get(uid);
+  if (!row || row.banned) return res.status(401).json({ error: 'Sign in required.' });
+  if (!row.totp_pending_secret) return res.status(400).json({ error: 'Start 2FA setup first.' });
+  if (!totp.verifyToken(code, row.totp_pending_secret)) return res.status(400).json({ error: 'Incorrect code - check your authenticator app and try again.' });
+
+  db.prepare('UPDATE users SET totp_secret = ?, totp_enabled = 1, totp_pending_secret = NULL WHERE id = ?')
+    .run(row.totp_pending_secret, row.id);
+  const updated = db.prepare('SELECT * FROM users WHERE id = ?').get(row.id);
+  setSessionCookie(res, signToken(updated));
+  res.json({ user: publicUser(updated) });
+});
+
+// --- Password reset (public - via a code an admin or the user emails to themselves) ---
+
+router.post('/reset-password', async (req, res) => {
+  const { username, code, password } = req.body || {};
+  if (typeof username !== 'string' || typeof code !== 'string') {
+    return res.status(400).json({ error: 'Username and code are required.' });
+  }
+  const row = db.prepare('SELECT * FROM users WHERE username_lower = ?').get(username.toLowerCase());
+  if (!row || !row.reset_code) return res.status(400).json({ error: 'Invalid or expired reset code.' });
+  if (Date.now() > row.reset_code_expires) return res.status(400).json({ error: 'That code expired - request a new one.' });
+  if (String(code).trim() !== row.reset_code) return res.status(400).json({ error: 'Incorrect code.' });
+  const pwError = validatePassword(password);
+  if (pwError) return res.status(400).json({ error: pwError });
+
+  const hash = await hashPassword(password);
+  db.prepare('UPDATE users SET password_hash = ?, reset_code = NULL, reset_code_expires = NULL WHERE id = ?').run(hash, row.id);
   res.json({ ok: true });
 });
 

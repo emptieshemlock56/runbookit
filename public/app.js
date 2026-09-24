@@ -51,11 +51,13 @@
     totpChallenge:null,
     emailChallenge:null,
     emailResendBanner:null,
+    mandatorySetup:null,
     accountBanner:null,
     twoFaSetup:null,
     twoFaCodeInput:'',
     emailInput:'',
     showCreateUserForm:false,
+    require2fa:false,
     newUserDraft:{username:'',password:'',email:'',isAdmin:false},
     createUserBanner:null,
     diffOpenId:null,
@@ -197,13 +199,56 @@
     STATE.adminUsers = null; STATE.adminLoadError = false;
     render();
     try{
-      const data = await withTimeout(api('GET','/admin/users'), 10000);
-      STATE.adminUsers = data.users;
+      const [usersData, settingData] = await Promise.all([
+        withTimeout(api('GET','/admin/users'), 10000),
+        api('GET','/admin/settings/require-2fa').catch(()=>({enabled:false})),
+      ]);
+      STATE.adminUsers = usersData.users;
+      STATE.require2fa = settingData.enabled;
       render();
     }catch(e){
       console.error('goAdmin failed', e);
       STATE.adminLoadError = true;
       render();
+    }
+  }
+  async function toggleRequire2fa(enabled){
+    try{
+      const data = await api('POST','/admin/settings/require-2fa', {enabled});
+      STATE.require2fa = data.enabled;
+    }catch(e){
+      alert('Could not update this setting: '+e.message);
+    }
+    render();
+  }
+  async function adminClearVerification(username){
+    if(!confirm(`Clear the stuck email verification for ${username}? They'll be able to sign in normally again.`)) return;
+    try{
+      await api('POST','/admin/users/'+encodeURIComponent(username)+'/clear-verification');
+      const data = await api('GET','/admin/users');
+      STATE.adminUsers = data.users;
+      render();
+    }catch(e){
+      alert('Could not clear verification: '+e.message);
+    }
+  }
+  async function adminSetPassword(username){
+    const pw = prompt(`New password for ${username} (10+ characters, upper+lowercase, a number):`);
+    if(!pw) return;
+    try{
+      await api('POST','/admin/users/'+encodeURIComponent(username)+'/set-password', {password:pw});
+      alert(`Password updated for ${username}.`);
+    }catch(e){
+      alert('Could not set password: '+e.message);
+    }
+  }
+  async function adminSendReset(username){
+    if(!confirm(`Email ${username} a password reset code?`)) return;
+    try{
+      await api('POST','/admin/users/'+encodeURIComponent(username)+'/send-reset');
+      alert('Reset code sent.');
+    }catch(e){
+      alert('Could not send reset code: '+e.message);
     }
   }
   function toggleCreateUserForm(){
@@ -739,6 +784,10 @@
         render();
         return;
       }
+      if(data.mustSetupTotp){
+        beginMandatoryTotpSetup(data.tempToken);
+        return;
+      }
       if(data.requiresTotp){
         STATE.totpChallenge = {tempToken: data.tempToken};
         STATE.authError = '';
@@ -774,6 +823,10 @@
     try{
       const data = await api('POST','/auth/login/verify-email', {tempToken: STATE.emailChallenge.tempToken, code});
       STATE.emailChallenge = null;
+      if(data.mustSetupTotp){
+        beginMandatoryTotpSetup(data.tempToken);
+        return;
+      }
       if(data.requiresTotp){
         STATE.totpChallenge = {tempToken: data.tempToken};
         STATE.authError = '';
@@ -798,6 +851,47 @@
       STATE.authError = e.message;
     }
     render();
+  }
+  async function beginMandatoryTotpSetup(tempToken){
+    STATE.mandatorySetup = {tempToken, secret:null, qrDataUrl:null};
+    STATE.authError = '';
+    render();
+    try{
+      const data = await api('POST','/auth/login/2fa-setup', {tempToken});
+      STATE.mandatorySetup.secret = data.secret;
+      STATE.mandatorySetup.qrDataUrl = data.qrDataUrl;
+    }catch(e){
+      STATE.authError = e.message;
+    }
+    render();
+  }
+  async function confirmMandatorySetup(){
+    const code = document.getElementById('hs-mandatory-2fa-code').value;
+    if(!code){ STATE.authError='Enter the 6-digit code.'; render(); return; }
+    try{
+      const data = await api('POST','/auth/login/2fa-confirm', {tempToken: STATE.mandatorySetup.tempToken, code});
+      STATE.user = data.user;
+      STATE.authModal = null; STATE.authError=''; STATE.mandatorySetup = null;
+      render();
+      if(STATE.user.isAdmin){ refreshPendingCount(); refreshReportCount(); }
+      loadNotifications();
+    }catch(e){
+      STATE.authError = e.message; render();
+    }
+  }
+  async function submitPasswordReset(){
+    const username = document.getElementById('hs-reset-user').value;
+    const code = document.getElementById('hs-reset-code').value;
+    const password = document.getElementById('hs-reset-pass').value;
+    if(!username || !code || !password){ STATE.authError='Fill in all three fields.'; render(); return; }
+    try{
+      await api('POST','/auth/reset-password', {username, code, password});
+      alert('Password updated. You can now sign in.');
+      STATE.authModal = 'login'; STATE.authError = '';
+      render();
+    }catch(e){
+      STATE.authError = e.message; render();
+    }
   }
   async function doLogout(){
     try{ await api('POST','/auth/logout'); }catch(e){}
@@ -1295,17 +1389,30 @@ What is this article about, and who's it for?
         action = `<button class="ghost" style="margin-right:4px;" onclick="HS.toggleAdmin('${escAttr(u.username)}', false)">Promote</button>`
           + `<button class="danger-txt" style="border:1px solid var(--border);" onclick="HS.toggleBan('${escAttr(u.username)}', false)">Ban</button>`;
       }
+      let manageActions = `<button class="ghost" style="margin-right:4px;" onclick="HS.adminSetPassword('${escAttr(u.username)}')">Set password</button>`;
+      if(u.email){
+        manageActions += `<button class="ghost" style="margin-right:4px;" onclick="HS.adminSendReset('${escAttr(u.username)}')">Send reset</button>`;
+      }
+      if(u.hasPendingVerification){
+        manageActions += `<button class="ghost" onclick="HS.adminClearVerification('${escAttr(u.username)}')">Clear stuck verification</button>`;
+      }
+      const emailCell = u.email
+        ? `${escAttr(u.email)}${u.emailVerified?'':' <span class="hs-hint" style="color:var(--danger);">(unverified)</span>'}`
+        : (u.hasPendingVerification ? `<span class="hs-hint">pending...</span>` : `<span class="hs-hint">&mdash;</span>`);
 
       return `<tr>
         <td>${escAttr(u.username)}</td>
         <td>${statusTag}</td>
         <td class="mono" style="color:var(--text-faint);">${new Date(u.createdAt).toLocaleDateString()}</td>
+        <td style="font-size:12.5px;">${emailCell}</td>
+        <td class="mono" style="color:${u.totpEnabled?'var(--ok)':'var(--text-faint)'};">${u.totpEnabled?'on':'off'}</td>
         <td class="mono" style="color:var(--text-dim);">${u.articlesCreated}</td>
         <td class="mono" style="color:var(--text-dim);">${u.editsMade}</td>
         <td class="mono" style="color:var(--text-dim);">${u.commentsPosted}</td>
         <td class="mono" style="color:${u.rejectedCount>0?'var(--danger)':'var(--text-dim)'};">${u.rejectedCount}</td>
         <td class="mono" style="color:${u.commentsRemoved>0?'var(--danger)':'var(--text-dim)'};">${u.commentsRemoved}</td>
-        <td>${action}</td>
+        <td style="white-space:nowrap;">${action}</td>
+        <td style="white-space:nowrap;">${manageActions}</td>
       </tr>`;
     }).join('');
 
@@ -1324,11 +1431,19 @@ What is this article about, and who's it for?
             <div class="hs-editor-actions"><button class="primary" onclick="HS.submitCreateUser()">Create account</button></div>
           </div>
         </div>` : ''}
+      <div class="hs-related" style="margin-top:0;">
+        <h4>Two-factor authentication</h4>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13.5px;cursor:pointer;margin-bottom:6px;">
+          <input type="checkbox" style="width:auto;" ${STATE.require2fa?'checked':''} onchange="HS.toggleRequire2fa(this.checked)" />
+          Require every account to set up 2FA
+        </label>
+        <div class="hs-hint">Off by default. Once on, anyone without 2FA is walked through setup the next time they sign in - including admins. Nothing changes for accounts that already have 2FA on.</div>
+      </div>
       <div class="hs-hint" style="margin-bottom:14px;">${STATE.adminUsers.length} account${STATE.adminUsers.length===1?'':'s'} total. "Rejected" counts submissions turned down in the review queue; "Removed" counts comments an admin took down (not the user's own deletions). Admins can't be banned directly - demote first if that's ever needed. The last remaining admin can't be demoted, to avoid locking everyone out.</div>
       <div style="overflow-x:auto;">
         <table class="hs-admin-table">
           <thead><tr>
-            <th>Username</th><th>Status</th><th>Joined</th><th>Articles</th><th>Edits</th><th>Comments</th><th>Rejected</th><th>Removed</th><th>Action</th>
+            <th>Username</th><th>Status</th><th>Joined</th><th>Email</th><th>2FA</th><th>Articles</th><th>Edits</th><th>Comments</th><th>Rejected</th><th>Removed</th><th>Action</th><th>Manage</th>
           </tr></thead>
           <tbody>${rows}</tbody>
         </table>
@@ -1601,6 +1716,23 @@ What is this article about, and who's it for?
   }
   function renderAuthModal(){
     if(!STATE.authModal) return '';
+    if(STATE.mandatorySetup){
+      const s = STATE.mandatorySetup;
+      return `<div class="hs-overlay">
+        <div class="hs-modal">
+          <h3>Set up two-factor authentication</h3>
+          <div class="sub">This site now requires 2FA on every account. Scan this with Google Authenticator, Authy, or similar, then enter the code it shows.</div>
+          ${s.qrDataUrl ? `<img src="${s.qrDataUrl}" alt="2FA QR code" style="width:180px;height:180px;border:1.5px solid var(--border);margin-bottom:10px;display:block;" />
+          <div class="hs-hint" style="margin-bottom:10px;">Can't scan? Enter manually: <span class="mono">${escAttr(s.secret)}</span></div>` : `<div class="hs-hint">Loading...</div>`}
+          <div class="hs-modal-field"><span class="hs-field-label">Code</span><input id="hs-mandatory-2fa-code" type="text" inputmode="numeric" placeholder="123456" onkeydown="if(event.key==='Enter'){HS.confirmMandatorySetup();}" /></div>
+          ${STATE.authError ? `<div class="hs-error">${escAttr(STATE.authError)}</div>` : ''}
+          <div class="hs-modal-actions">
+            <span></span>
+            <button class="primary" onclick="HS.confirmMandatorySetup()">Confirm & continue</button>
+          </div>
+        </div>
+      </div>`;
+    }
     if(STATE.emailChallenge){
       return `<div class="hs-overlay" onclick="if(event.target===this) HS.closeAuth();">
         <div class="hs-modal">
@@ -1636,6 +1768,22 @@ What is this article about, and who's it for?
         </div>
       </div>`;
     }
+    if(STATE.authModal==='reset'){
+      return `<div class="hs-overlay" onclick="if(event.target===this) HS.closeAuth();">
+        <div class="hs-modal">
+          <h3>Reset your password</h3>
+          <div class="sub">Enter the code that was emailed to you (or that an admin sent you), along with your new password.</div>
+          <div class="hs-modal-field"><span class="hs-field-label">Username</span><input id="hs-reset-user" type="text" placeholder="e.g. zack" /></div>
+          <div class="hs-modal-field"><span class="hs-field-label">Code</span><input id="hs-reset-code" type="text" inputmode="numeric" placeholder="123456" /></div>
+          <div class="hs-modal-field"><span class="hs-field-label">New password</span><input id="hs-reset-pass" type="password" placeholder="10+ characters, upper+lowercase, a number" onkeydown="if(event.key==='Enter'){HS.submitPasswordReset();}" /></div>
+          ${STATE.authError ? `<div class="hs-error">${escAttr(STATE.authError)}</div>` : ''}
+          <div class="hs-modal-actions">
+            <button class="switch hs-switch" onclick="HS.openAuth('login')">Back to sign in</button>
+            <button class="primary" onclick="HS.submitPasswordReset()">Reset password</button>
+          </div>
+        </div>
+      </div>`;
+    }
     const isLogin = STATE.authModal==='login';
     return `<div class="hs-overlay" onclick="if(event.target===this) HS.closeAuth();">
       <div class="hs-modal">
@@ -1646,6 +1794,7 @@ What is this article about, and who's it for?
         ${!isLogin ? `<div class="hs-modal-field"><span class="hs-field-label">Email</span><input id="hs-auth-email" type="text" placeholder="you@example.com - a code is sent to verify it" onkeydown="if(event.key==='Enter'){HS.submitAuth();}" /></div>` : ''}
         ${(!isLogin && STATE.turnstileSiteKey) ? `<div class="hs-modal-field"><div id="hs-turnstile-container"></div></div>` : ''}
         ${STATE.authError ? `<div class="hs-error">${escAttr(STATE.authError)}</div>` : ''}
+        ${isLogin ? `<div style="margin-top:2px;"><button class="switch hs-switch" onclick="HS.openAuth('reset')">Forgot password?</button></div>` : ''}
         <div class="hs-modal-actions">
           <button class="switch hs-switch" onclick="HS.openAuth('${isLogin?'signup':'login'}')">${isLogin? "Need an account? Sign up" : "Already have one? Sign in"}</button>
           <div style="display:flex;gap:8px;">
@@ -1733,6 +1882,7 @@ What is this article about, and who's it for?
     tbAction, copyCode, uploadImage,
     castVote,
     goAdmin, toggleBan, toggleAdmin,
+    toggleRequire2fa, adminClearVerification, adminSetPassword, adminSendReset,
     goBackupSettings, saveBackupSettings, runBackupNow,
     goAccount, submitSetEmail, submitVerifyEmailCode, resendVerificationCode,
     startTotpSetup, confirmTotpSetup, disableTotp,
