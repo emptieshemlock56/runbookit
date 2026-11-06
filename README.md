@@ -62,6 +62,19 @@ Visit **http://localhost:3000**.
 
 Any signed-in user can report an article or a comment (a small "Report" button, prompts for a reason). Admins see a red "REPORTS (N)" badge in the nav the moment something's flagged - even if the admin is the one who just filed it - and a Reports page listing each one with its target and reason. Dismissing just clears the report; if the content itself needs action, use the existing lock/ban/delete tools separately.
 
+## AI writer (admin)
+
+Admins get an **AI writer** link in the nav. Describe a page ("build a page that gives instructions on how to create a VPN tunnel between AWS and a FortiGate") and an agent built on Claude (`agent/writer.js`):
+
+1. searches the wiki for an existing article, and skips the job if the topic is already covered,
+2. researches the topic with web search/fetch, preferring vendor documentation,
+3. writes a runbook in the site's markdown dialect (overview, prerequisites, steps, verification, troubleshooting, references),
+4. publishes it under the requesting admin's name, with the revision tagged `(AI writer)`, or puts it in the review queue if you pick that option.
+
+Progress shows live on the page. A page typically takes 2-6 minutes and roughly $0.50-$2 in API usage. Links in the output are restricted to http(s) and images are stripped, since web content can contain prompt injection.
+
+Setup: add `ANTHROPIC_API_KEY=sk-ant-...` to `.env` (key from console.anthropic.com) and restart. Optional: `AGENT_MODEL` (default `claude-opus-5-5`) and `AGENT_EFFORT` (default `high`). Requests use the API's server-side refusal fallback, so if a safety filter declines a security topic, the request is retried on a fallback model.
+
 ## Admin user management
 
 - **Manage Users table** now shows each account's email (and verification status) and whether 2FA is on.

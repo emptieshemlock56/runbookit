@@ -14,6 +14,7 @@ const adminRoutes = require('./routes/admin');
 const publicRoutes = require('./routes/public');
 const uploadRoutes = require('./routes/uploads');
 const notificationRoutes = require('./routes/notifications');
+const agentRoutes = require('./routes/agent');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -80,6 +81,7 @@ app.use('/api/uploads', writeLimiter);
 app.use('/api/auth', authRoutes);
 app.use('/api', articleRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/admin', agentRoutes);
 app.use('/api', publicRoutes);
 app.use('/api', uploadRoutes);
 app.use('/api', notificationRoutes);

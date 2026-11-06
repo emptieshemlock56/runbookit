@@ -417,6 +417,52 @@
       render();
     }
   }
+  // ---------- AI writer (admin) ----------
+  let writerPollTimer = null;
+  async function goWriter(){
+    STATE.view = {name:'writer'};
+    if(STATE.writerDraft === undefined) STATE.writerDraft = {prompt:'', mode:'publish'};
+    STATE.writerError = '';
+    render();
+    await refreshWriterJobs();
+  }
+  async function refreshWriterJobs(){
+    try{
+      const prevActive = STATE.writerData ? STATE.writerData.jobs.filter(j => j.status==='queued' || j.status==='running').map(j => j.id) : [];
+      const data = await withTimeout(api('GET','/admin/agent/jobs'), 10000);
+      STATE.writerData = data;
+      // A job just finished publishing - pull the new article into the sidebar/index.
+      if(data.jobs.some(j => prevActive.includes(j.id) && j.resultSlug)){ try{ await loadIndex(); }catch(e){} }
+      STATE.writerLoadError = false;
+    }catch(e){
+      console.error('refreshWriterJobs failed', e);
+      STATE.writerLoadError = true;
+    }
+    if(STATE.view.name !== 'writer') return;
+    // Re-rendering replaces the textarea, so keep focus/caret if the user is typing.
+    const ta = document.getElementById('hs-writer-prompt');
+    const hadFocus = ta && document.activeElement === ta;
+    const caret = hadFocus ? ta.selectionStart : null;
+    render();
+    if(hadFocus){ const n = document.getElementById('hs-writer-prompt'); if(n){ n.focus(); n.setSelectionRange(caret, caret); } }
+    clearTimeout(writerPollTimer);
+    const active = STATE.writerData && STATE.writerData.jobs.some(j => j.status==='queued' || j.status==='running');
+    if(active) writerPollTimer = setTimeout(refreshWriterJobs, 3000);
+  }
+  async function submitWriterJob(){
+    const prompt = (STATE.writerDraft.prompt || '').trim();
+    if(prompt.length < 10){ STATE.writerError = 'Describe the page you want in a bit more detail.'; render(); return; }
+    STATE.writerError = ''; STATE.writerSubmitting = true; render();
+    try{
+      await api('POST','/admin/agent/jobs', {prompt, mode: STATE.writerDraft.mode});
+      STATE.writerDraft.prompt = '';
+    }catch(e){
+      STATE.writerError = e.message;
+    }
+    STATE.writerSubmitting = false;
+    await refreshWriterJobs();
+  }
+
   async function goReports(){
     STATE.view = {name:'reports'};
     STATE.reportsList = null; STATE.reportsLoadError = false;
@@ -1057,7 +1103,7 @@
           <button class="ghost" onclick="HS.toggleNotifDropdown()">&#128276;${STATE.unreadCount>0?` <span style="background:var(--danger);color:#fff;padding:1px 6px;font-size:10px;font-weight:700;">${STATE.unreadCount}</span>`:''}</button>
           ${STATE.notifDropdownOpen ? renderNotifDropdown() : ''}
         </div>` : ''}
-        ${STATE.user ? `<div class="hs-userchip">signed in as <a href="#" onclick="HS.goAccount();return false;"><b>${escAttr(STATE.user.username)}</b></a>${STATE.user.isAdmin?`<a href="#" onclick="HS.goAdmin();return false;" class="hs-admin-badge" style="text-decoration:none;cursor:pointer;">admin</a>`:''}${(STATE.user.isAdmin && STATE.pendingCount>0)?`<a href="#" onclick="HS.goReview();return false;" class="hs-admin-badge" style="text-decoration:none;cursor:pointer;background:var(--danger);">review (${STATE.pendingCount})</a>`:''}${(STATE.user.isAdmin && STATE.reportCount>0)?`<a href="#" onclick="HS.goReports();return false;" class="hs-admin-badge" style="text-decoration:none;cursor:pointer;background:var(--danger);">reports (${STATE.reportCount})</a>`:''}<button class="ghost" onclick="HS.logout()">Sign out</button></div>`
+        ${STATE.user ? `<div class="hs-userchip">signed in as <a href="#" onclick="HS.goAccount();return false;"><b>${escAttr(STATE.user.username)}</b></a>${STATE.user.isAdmin?`<a href="#" onclick="HS.goAdmin();return false;" class="hs-admin-badge" style="text-decoration:none;cursor:pointer;">admin</a><a href="#" onclick="HS.goWriter();return false;" class="hs-admin-badge" style="text-decoration:none;cursor:pointer;">AI writer</a>`:''}${(STATE.user.isAdmin && STATE.pendingCount>0)?`<a href="#" onclick="HS.goReview();return false;" class="hs-admin-badge" style="text-decoration:none;cursor:pointer;background:var(--danger);">review (${STATE.pendingCount})</a>`:''}${(STATE.user.isAdmin && STATE.reportCount>0)?`<a href="#" onclick="HS.goReports();return false;" class="hs-admin-badge" style="text-decoration:none;cursor:pointer;background:var(--danger);">reports (${STATE.reportCount})</a>`:''}<button class="ghost" onclick="HS.logout()">Sign out</button></div>`
           : `<button onclick="HS.openAuth('login')">Sign in</button><button onclick="HS.openAuth('signup')">Sign up</button>`}
       </div>
     </div>`;
@@ -1418,7 +1464,7 @@ What is this article about, and who's it for?
 
     return `<div class="hs-main">
       <div class="hs-breadcrumb"><a href="#" onclick="HS.goHome();return false;">all articles</a> / Admin</div>
-      <div class="hs-list-head"><h2>Manage users</h2><div style="display:flex;gap:8px;"><button class="ghost" onclick="HS.toggleCreateUserForm()">${STATE.showCreateUserForm?'Cancel':'+ Create user'}</button><button class="ghost" onclick="HS.goBackupSettings()">Backup settings</button></div></div>
+      <div class="hs-list-head"><h2>Manage users</h2><div style="display:flex;gap:8px;"><button class="ghost" onclick="HS.toggleCreateUserForm()">${STATE.showCreateUserForm?'Cancel':'+ Create user'}</button><button class="ghost" onclick="HS.goWriter()">AI writer</button><button class="ghost" onclick="HS.goBackupSettings()">Backup settings</button></div></div>
       ${STATE.showCreateUserForm ? `
         <div class="hs-related" style="margin-top:0;">
           <h4>Create a local account</h4>
@@ -1651,6 +1697,60 @@ What is this article about, and who's it for?
       </div>`).join('')}
     </div>`;
   }
+  function renderWriter(){
+    if(!isAdmin()) return `<div class="hs-main"><div class="hs-empty">Admin access required.</div></div>`;
+    const d = STATE.writerData;
+    const draft = STATE.writerDraft || {prompt:'', mode:'publish'};
+    const statusTag = j => {
+      const map = {queued:['queued',''], running:['writing...','accent'], done:['done','ok'], skipped:['skipped',''], failed:['failed','danger']};
+      const [label, kind] = map[j.status] || [j.status,''];
+      const style = kind==='accent' ? 'border-color:var(--accent-line);color:var(--accent);'
+        : kind==='danger' ? 'border-color:var(--danger);color:var(--danger);'
+        : kind==='ok' ? 'border-color:var(--accent);color:var(--text);' : '';
+      return `<span class="hs-tag" style="${style}">${label}</span>`;
+    };
+    const jobCard = j => {
+      const active = j.status==='queued' || j.status==='running';
+      const lastLines = active ? j.log.slice(-6) : [];
+      let result = '';
+      if(j.resultSlug) result = `<div style="margin-top:8px;">Published: <a href="#" onclick="HS.openArticle('${escAttr(j.resultSlug)}');return false;"><b>${escAttr(j.resultTitle)}</b></a></div>`;
+      else if(j.pendingId) result = `<div style="margin-top:8px;">"${escAttr(j.resultTitle)}" is waiting in the <a href="#" onclick="HS.goReview();return false;">review queue</a>.</div>`;
+      if(j.error) result += `<div class="hs-hint" style="margin-top:8px;white-space:pre-wrap;${j.status==='failed'?'color:var(--danger);':''}">${escAttr(j.error)}</div>`;
+      const tokens = (j.inputTokens||j.outputTokens) ? `<span>${Math.round(j.inputTokens/1000)}k in / ${Math.round(j.outputTokens/1000)}k out tokens</span>` : '';
+      return `<div class="hs-card" style="cursor:default;">
+        <p class="hs-card-title" style="font-family:var(--grotesk);font-size:15px;">${escAttr(j.prompt)}</p>
+        <div class="hs-card-meta">${statusTag(j)}<span>${j.mode==='review'?'to review queue':'auto-publish'}</span><span>by ${escAttr(j.requestedBy)}</span><span>${timeAgo(j.createdAt)}</span>${tokens}</div>
+        ${lastLines.length ? `<div style="margin-top:10px;font-family:var(--mono);font-size:12px;color:var(--text-faint);line-height:1.7;">${lastLines.map(l=>`<div>&rsaquo; ${escAttr(l.msg)}</div>`).join('')}</div>` : ''}
+        ${result}
+      </div>`;
+    };
+    let jobsHtml;
+    if(STATE.writerLoadError) jobsHtml = `<div class="hs-empty">Couldn't load jobs. <button class="ghost" onclick="HS.goWriter()">Retry</button></div>`;
+    else if(!d) jobsHtml = `<div class="hs-empty">Loading...</div>`;
+    else if(!d.jobs.length) jobsHtml = `<div class="hs-empty">No pages written yet.</div>`;
+    else jobsHtml = d.jobs.map(jobCard).join('');
+    const notConfigured = d && !d.configured
+      ? `<div class="hs-hint" style="color:var(--danger);margin-bottom:12px;">ANTHROPIC_API_KEY isn't set on the server. Add it to .env and restart to enable the writer.</div>` : '';
+    return `<div class="hs-main">
+      <div class="hs-breadcrumb"><a href="#" onclick="HS.goHome();return false;">all articles</a> / AI writer</div>
+      <div class="hs-list-head"><h2>AI writer</h2></div>
+      <div class="hs-hint" style="margin-bottom:14px;">Describe the page you want. The agent checks the wiki for an existing article, researches the topic on the web (vendor docs first), writes a runbook, and publishes it under your name. A page usually takes 2-6 minutes.</div>
+      ${notConfigured}
+      <div class="hs-card" style="cursor:default;">
+        <div class="hs-field-label">What should the page cover?</div>
+        <textarea id="hs-writer-prompt" rows="4" placeholder="Build a page that gives instructions on how to create a VPN tunnel between AWS and a FortiGate" oninput="HS.onWriterDraft('prompt', this.value)">${escAttr(draft.prompt)}</textarea>
+        <div style="display:flex;align-items:center;gap:16px;margin-top:10px;flex-wrap:wrap;">
+          <label style="display:flex;align-items:center;gap:6px;font-size:13px;"><input type="radio" name="hs-writer-mode" ${draft.mode==='publish'?'checked':''} onchange="HS.onWriterDraft('mode','publish')"> Publish immediately</label>
+          <label style="display:flex;align-items:center;gap:6px;font-size:13px;"><input type="radio" name="hs-writer-mode" ${draft.mode==='review'?'checked':''} onchange="HS.onWriterDraft('mode','review')"> Send to review queue first</label>
+          <span style="flex:1"></span>
+          <button class="primary" ${STATE.writerSubmitting?'disabled':''} onclick="HS.submitWriterJob()">${STATE.writerSubmitting?'Starting...':'Write page'}</button>
+        </div>
+        ${STATE.writerError ? `<div class="hs-hint" style="color:var(--danger);margin-top:8px;">${escAttr(STATE.writerError)}</div>` : ''}
+      </div>
+      <div class="hs-list-head" style="margin-top:22px;"><h2 style="font-size:18px;">Recent jobs</h2></div>
+      ${jobsHtml}
+    </div>`;
+  }
   function renderReportsQueue(){
     if(!isAdmin()) return `<div class="hs-main"><div class="hs-empty">Admin access required.</div></div>`;
     if(STATE.reportsLoadError){
@@ -1829,6 +1929,7 @@ What is this article about, and who's it for?
     else if(STATE.view.name==='leaderboard') mainHtml = renderLeaderboard();
     else if(STATE.view.name==='bookmarks') mainHtml = renderBookmarks();
     else if(STATE.view.name==='reports') mainHtml = renderReportsQueue();
+    else if(STATE.view.name==='writer') mainHtml = renderWriter();
     else mainHtml = renderHome();
 
     root.innerHTML = `
@@ -1893,6 +1994,8 @@ What is this article about, and who's it for?
     onBackupDraft(field, val){ STATE.backupDraft[field]=val; },
     goReview, approvePending, rejectPending,
     goReports, dismissReport,
+    goWriter, submitWriterJob,
+    onWriterDraft(field, val){ STATE.writerDraft[field]=val; },
     toggleNotifDropdown, openNotification, markAllNotifsRead,
     toggleBookmark, exportMarkdown, reportArticle, reportComment,
     openProfile, goLeaderboard, goBookmarks,
