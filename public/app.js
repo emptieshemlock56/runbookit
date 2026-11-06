@@ -30,7 +30,8 @@
     submittedMessage:'',
     searchResults:null,
     searchLoading:false,
-    tagFilter:null,
+    tagFilters:[],
+    showAllTags:false,
     bookmarkedSlugs:new Set(),
     profileData:null,
     profileLoadError:false,
@@ -193,7 +194,7 @@
       render();
     }
   }
-  function goHome(){ STATE.view={name:'home'}; STATE.category=null; STATE.tagFilter=null; STATE.search=''; STATE.searchResults=null; render(); }
+  function goHome(){ STATE.view={name:'home'}; STATE.category=null; STATE.tagFilters=[]; STATE.showAllTags=false; STATE.search=''; STATE.searchResults=null; render(); }
   async function goAdmin(){
     STATE.view = {name:'admin'};
     STATE.adminUsers = null; STATE.adminLoadError = false;
@@ -996,14 +997,28 @@
   }
 
   // ---------- render helpers ----------
-  function filteredIndex(){
-    if(STATE.search.trim()){
-      return STATE.searchResults || [];
-    }
+  // Articles in scope before tag filtering: search results, or the index narrowed by category.
+  function baseIndex(){
+    if(STATE.search.trim()) return STATE.searchResults || [];
     let list = STATE.index.slice();
     if(STATE.category) list = list.filter(a=>a.category===STATE.category);
-    if(STATE.tagFilter) list = list.filter(a=>(a.tags||[]).includes(STATE.tagFilter));
     return list.sort((a,b)=>b.updatedAt-a.updatedAt);
+  }
+  function matchesTags(a){
+    const tags = a.tags || [];
+    return STATE.tagFilters.every(t => tags.includes(t));
+  }
+  function filteredIndex(){
+    return baseIndex().filter(matchesTags);
+  }
+  // Tag facets for the filter bar: how many articles each tag would leave if added to the
+  // current selection. Selected tags always show; tags that would leave nothing are hidden.
+  function tagFacets(){
+    const list = filteredIndex();
+    const counts = {};
+    list.forEach(a => (a.tags||[]).forEach(t => { if(!STATE.tagFilters.includes(t)) counts[t] = (counts[t]||0) + 1; }));
+    const others = Object.keys(counts).sort((x,y) => counts[y]-counts[x] || x.localeCompare(y)).map(t => ({tag:t, count:counts[t]}));
+    return { selected: STATE.tagFilters.slice(), others };
   }
   let searchDebounceTimer = null;
   function runSearch(q){
@@ -1075,17 +1090,59 @@
       </div>`).join('')}
     </div>`;
   }
+  const TAG_CHIP_LIMIT = 14;
+  function renderTagFilter(){
+    const { selected, others } = tagFacets();
+    if(!selected.length && !others.length) return '';
+    const visible = STATE.showAllTags ? others : others.slice(0, TAG_CHIP_LIMIT);
+    const hidden = others.length - visible.length;
+    const chip = (t, count, active) => `<button type="button" class="hs-filter-chip${active?' active':''}" data-tag="${escAttr(t)}" onclick="HS.toggleTagFilter('${escAttr(t)}')" title="${active?'Remove filter':'Filter by this tag'}">#${escAttr(t)}${active ? ' <span class="x">&times;</span>' : ` <span class="n">${count}</span>`}</button>`;
+    return `<div class="hs-filterbar">
+      <div class="hs-filterbar-head">
+        <span class="hs-filterbar-label">Filter by tag</span>
+        ${others.length > 6 ? `<input type="text" class="hs-filterbar-find" placeholder="Find a tag, e.g. cisco" oninput="HS.findTag(this.value)">` : ''}
+        ${selected.length ? `<button type="button" class="ghost hs-filterbar-clear" onclick="HS.clearTagFilters()">Clear</button>` : ''}
+      </div>
+      <div class="hs-filterbar-chips" id="hs-tag-chips">
+        ${selected.map(t => chip(t, 0, true)).join('')}
+        ${visible.map(f => chip(f.tag, f.count, false)).join('')}
+        ${others.slice(visible.length).map(f => chip(f.tag, f.count, false).replace('class="hs-filter-chip"', 'class="hs-filter-chip overflow" hidden')).join('')}
+        ${hidden > 0 ? `<button type="button" class="hs-filterbar-more" onclick="HS.toggleAllTags()">+${hidden} more</button>` : (STATE.showAllTags && others.length > TAG_CHIP_LIMIT ? `<button type="button" class="hs-filterbar-more" onclick="HS.toggleAllTags()">Show fewer</button>` : '')}
+        <span class="hs-hint hs-filterbar-nomatch" hidden>No tags match.</span>
+      </div>
+    </div>`;
+  }
+  // Typing in the find box filters chips in place (no re-render, so the input keeps focus).
+  function findTag(q){
+    q = q.trim().toLowerCase().replace(/^#/, '');
+    const box = document.getElementById('hs-tag-chips');
+    if(!box) return;
+    let shown = 0;
+    box.querySelectorAll('.hs-filter-chip').forEach(el => {
+      const active = el.classList.contains('active');
+      const isOverflow = el.classList.contains('overflow');
+      const match = el.dataset.tag.includes(q);
+      const show = active || (q ? match : !isOverflow);
+      el.hidden = !show;
+      if(show && !active) shown++;
+    });
+    const more = box.querySelector('.hs-filterbar-more');
+    if(more) more.hidden = !!q;
+    box.querySelector('.hs-filterbar-nomatch').hidden = !(q && shown === 0);
+  }
   function renderHome(){
     const list = filteredIndex();
-    const heading = STATE.search ? `Search: "${escAttr(STATE.search)}"` : (STATE.tagFilter ? `Tag: ${escAttr(STATE.tagFilter)}` : (STATE.category ? catLabel(STATE.category) : 'All Articles'));
+    const heading = STATE.search ? `Search: "${escAttr(STATE.search)}"` : (STATE.category ? catLabel(STATE.category) : 'All Articles');
+    const filtering = STATE.tagFilters.length > 0;
     return `<div class="hs-main">
-      ${STATE.category===null && !STATE.search && !STATE.tagFilter ? `<div class="hs-hero">
+      ${STATE.category===null && !STATE.search && !filtering ? `<div class="hs-hero">
         <h1>AI can troubleshoot it. <span class="accent">Runbook it</span> so it's still there next time.</h1>
         <p>Community-written IT how-tos - vetted, corrected, and kept up to date by people who've actually done the work.</p>
       </div>` : ''}
-      <div class="hs-list-head"><h2>${heading}</h2>${STATE.tagFilter ? `<button class="ghost" onclick="HS.setTagFilter(null)">Clear tag</button>` : ''}</div>
+      <div class="hs-list-head"><h2>${heading}</h2>${(filtering || STATE.category || STATE.search.trim()) && !STATE.searchLoading ? `<span class="hs-hint">${list.length} article${list.length===1?'':'s'}</span>` : ''}</div>
+      ${renderTagFilter()}
       ${STATE.search.trim() && STATE.searchLoading ? `<div class="hs-empty">Searching...</div>` :
-        list.length===0 ? `<div class="hs-empty">${STATE.search.trim() ? "No articles matched that search." : "Nothing here yet. Be the first to add an article in this category."}</div>` :
+        list.length===0 ? `<div class="hs-empty">${filtering ? `No articles have all of those tags${STATE.category ? ' in this category' : ''}. <a href="#" onclick="HS.clearTagFilters();return false;">Clear the tag filter</a>` : (STATE.search.trim() ? "No articles matched that search." : "Nothing here yet. Be the first to add an article in this category.")}</div>` :
         list.map((a,i)=>`<div class="hs-card">
           <div onclick="HS.openArticle('${a.slug}')" style="cursor:pointer;">
             <p class="hs-card-title">${escAttr(a.title)}</p>
@@ -1099,7 +1156,7 @@
             <span>${a.commentCount||0} comment${(a.commentCount||0)===1?'':'s'}</span>
             <span>${a.revisionCount||1} revision${(a.revisionCount||1)===1?'':'s'}</span>
           </div>
-          ${(a.tags&&a.tags.length) ? `<div class="hs-card-meta" style="margin-top:6px;">${a.tags.map(t=>`<span class="hs-tag" style="cursor:pointer;" onclick="event.stopPropagation();HS.setTagFilter('${escAttr(t)}')">#${escAttr(t)}</span>`).join('')}</div>` : ''}
+          ${(a.tags&&a.tags.length) ? `<div class="hs-card-meta" style="margin-top:6px;">${a.tags.map(t=>`<span class="hs-tag${STATE.tagFilters.includes(t)?' active':''}" style="cursor:pointer;" onclick="event.stopPropagation();HS.toggleTagFilter('${escAttr(t)}')">#${escAttr(t)}</span>`).join('')}</div>` : ''}
         </div>`).join('')}
     </div>`;
   }
@@ -1861,8 +1918,15 @@ What is this article about, and who's it for?
 
   window.HS = {
     goHome, goNew, goEdit, openArticle,
-    setCategory(id){ STATE.category=id; STATE.tagFilter=null; STATE.search=''; STATE.searchResults=null; STATE.view={name:'home'}; render(); },
-    setTagFilter(tag){ STATE.tagFilter=tag; STATE.category=null; STATE.search=''; STATE.searchResults=null; STATE.view={name:'home'}; render(); },
+    setCategory(id){ STATE.category=id; STATE.search=''; STATE.searchResults=null; STATE.view={name:'home'}; render(); },
+    setTagFilter(tag){ STATE.tagFilters=tag ? [tag] : []; STATE.category=null; STATE.search=''; STATE.searchResults=null; STATE.view={name:'home'}; render(); },
+    toggleTagFilter(tag){
+      STATE.tagFilters = STATE.tagFilters.includes(tag) ? STATE.tagFilters.filter(t=>t!==tag) : [...STATE.tagFilters, tag];
+      STATE.view={name:'home'}; render();
+    },
+    clearTagFilters(){ STATE.tagFilters=[]; render(); },
+    toggleAllTags(){ STATE.showAllTags=!STATE.showAllTags; render(); },
+    findTag,
     onSearch(v){ STATE.search=v; if(STATE.view.name!=='home') STATE.view={name:'home'}; runSearch(v); },
     openAuth(mode){ STATE.authModal=mode; STATE.authError=''; STATE.totpChallenge=null; STATE.emailChallenge=null; STATE.emailResendBanner=null; STATE.turnstileToken=null; render();
       setTimeout(()=>{ const el=document.getElementById('hs-auth-user'); if(el) el.focus(); },0);
