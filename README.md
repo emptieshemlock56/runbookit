@@ -62,6 +62,24 @@ Visit **http://localhost:3000**.
 
 Any signed-in user can report an article or a comment (a small "Report" button, prompts for a reason). Admins see a red "REPORTS (N)" badge in the nav the moment something's flagged - even if the admin is the one who just filed it - and a Reports page listing each one with its target and reason. Dismissing just clears the report; if the content itself needs action, use the existing lock/ban/delete tools separately.
 
+## Writing pages with Claude Code
+
+Pages can be researched, written and published from a Claude Code session in this folder. Ask something like "build a page on creating a VPN tunnel between AWS and a FortiGate". The `write-page` skill (`.claude/skills/write-page/`) then:
+
+1. checks the live site for an existing article,
+2. researches vendor docs,
+3. writes `pages/<name>.md`,
+4. shows you a summary, and publishes once you approve.
+
+Pages appear under `PUBLISH_AS` (default: the first admin), and their revisions are tagged `(AI-assisted)`.
+
+Under the hood it uses `node scripts/site.js` (run with no arguments for usage), which calls `POST /api/publish`. That endpoint only exists when `PUBLISH_TOKEN` is set.
+
+Setup:
+1. Generate a token: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`
+2. Set `PUBLISH_TOKEN` to it on the live server (and optionally `PUBLISH_AS=<username>`), then restart.
+3. In your local `.env`, set the same `PUBLISH_TOKEN` and `SITE_URL=https://<your domain>`.
+
 ## Admin user management
 
 - **Manage Users table** now shows each account's email (and verification status) and whether 2FA is on.

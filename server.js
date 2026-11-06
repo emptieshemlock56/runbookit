@@ -14,6 +14,7 @@ const adminRoutes = require('./routes/admin');
 const publicRoutes = require('./routes/public');
 const uploadRoutes = require('./routes/uploads');
 const notificationRoutes = require('./routes/notifications');
+const publishRoutes = require('./routes/publish');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -76,6 +77,7 @@ app.use('/api/articles', (req, res, next) => {
   return writeLimiter(req, res, next);
 });
 app.use('/api/uploads', writeLimiter);
+app.use('/api/publish', writeLimiter);
 
 app.use('/api/auth', authRoutes);
 app.use('/api', articleRoutes);
@@ -83,6 +85,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api', publicRoutes);
 app.use('/api', uploadRoutes);
 app.use('/api', notificationRoutes);
+app.use('/api', publishRoutes);
 
 // RSS feed of the most recently updated articles - plain XML, no auth, standard RSS reader path.
 app.get('/rss.xml', (req, res) => {
