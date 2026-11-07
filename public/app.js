@@ -144,7 +144,8 @@
       if(/^###\s+/.test(line)){ flushPara(); flushList(); html += `<h3>${inline(line.replace(/^###\s+/,''))}</h3>`; i++; continue; }
       if(/^##\s+/.test(line)){ flushPara(); flushList(); const h2text = line.replace(/^##\s+/,''); html += `<h2 id="${slugify(h2text)}">${inline(h2text)}</h2>`; i++; continue; }
       if(/^#\s+/.test(line)){ flushPara(); flushList(); html += `<h1>${inline(line.replace(/^#\s+/,''))}</h1>`; i++; continue; }
-      if(/^>\s?/.test(line)){ flushPara(); flushList(); html += `<blockquote>${inline(line.replace(/^>\s?/,''))}</blockquote>`; i++; continue; }
+      // Lines are HTML-escaped before parsing, so a leading ">" arrives here as "&gt;".
+      if(/^&gt;\s?/.test(line)){ flushPara(); flushList(); html += `<blockquote>${inline(line.replace(/^&gt;\s?/,''))}</blockquote>`; i++; continue; }
       if(/^-\s+/.test(line)){ flushPara(); if(listType!=='ul'){flushList(); listType='ul';} listBuf.push(line.replace(/^-\s+/,'')); i++; continue; }
       if(/^\d+\.\s+/.test(line)){ flushPara(); if(listType!=='ol'){flushList(); listType='ol';} listBuf.push(line.replace(/^\d+\.\s+/,'')); i++; continue; }
       if(line.trim()===''){ flushPara(); flushList(); i++; continue; }
